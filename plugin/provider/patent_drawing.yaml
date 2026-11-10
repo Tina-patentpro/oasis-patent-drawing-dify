@@ -1,0 +1,53 @@
+identity:
+  author: tina-patentpro
+  name: oasisintwrite_patent_drawing
+  label:
+    en_US: Patent Drawings — GPT
+    zh_Hans: 专利附图-GPT
+  description:
+    en_US: Patent drawing assistance with explicit review metadata.
+    zh_Hans: 专利技术附图辅助绘制与局部修改，需人工审阅。
+  icon: icon.png
+  tags:
+  - image
+  - productivity
+credentials_for_provider:
+  openai_api_key:
+    type: secret-input
+    required: true
+    label:
+      en_US: OpenAI API Key
+      zh_Hans: OpenAI API密钥
+    help:
+      en_US: OpenAI官方API密钥；只做本地配置校验，不验证余额或模型权限。
+      zh_Hans: OpenAI官方API密钥；只做本地配置校验，不验证余额或模型权限。
+    url: https://platform.openai.com/api-keys
+  dify_file_origin:
+    type: text-input
+    required: false
+    label:
+      en_US: Trusted Dify file origin
+      zh_Hans: 可信Dify文件origin
+    help:
+      en_US: Dify文件URL的精确协议、主机和端口，例如https://dify.example.com；处理Dify URL文件时必填。
+      zh_Hans: Dify文件URL的精确协议、主机和端口，例如https://dify.example.com；处理Dify URL文件时必填。
+  dify_internal_files_url:
+    type: text-input
+    required: false
+    label:
+      en_US: Internal Dify file base URL
+      zh_Hans: Dify内部抓取基址
+    help:
+      en_US: 可选，例如http://api:5001；仅对已匹配可信origin的签名文件URL重写。
+      zh_Hans: 可选，例如http://api:5001；仅对已匹配可信origin的签名文件URL重写。
+tools:
+- tools/generate.yaml
+- tools/edit.yaml
+- tools/validate_set.yaml
+- tools/render_set_figure.yaml
+- tools/package_set.yaml
+- tools/plan_set.yaml
+- tools/workspace.yaml
+extra:
+  python:
+    source: provider/patent_drawing.py

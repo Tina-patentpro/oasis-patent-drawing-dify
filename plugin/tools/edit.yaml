@@ -1,0 +1,180 @@
+identity:
+  name: patent_drawing_edit
+  author: tina-patentpro
+  label:
+    en_US: Edit patent drawing
+    zh_Hans: 修改专利附图
+description:
+  human:
+    en_US: 修改专利附图
+    zh_Hans: 修改专利附图，使用GPT-Image-2.6 Flare，输出文件与人工审阅提示。
+  llm: Edit one reference patent drawing according to explicit changes; preserve unaffected
+    labels and structure. Optional transparent PNG mask. Output PNG files; human review
+    required.
+parameters:
+- name: reference_image
+  type: file
+  required: true
+  form: llm
+  label:
+    en_US: Reference drawing
+    zh_Hans: 参考附图
+  human_description:
+    en_US: 一张PNG/JPEG/WebP参考图，最多10MiB、1600万像素。
+    zh_Hans: 一张PNG/JPEG/WebP参考图，最多10MiB、1600万像素。
+  llm_description: 一张PNG/JPEG/WebP参考图，最多10MiB、1600万像素。
+- name: mask
+  type: file
+  required: false
+  form: llm
+  label:
+    en_US: Edit mask
+    zh_Hans: 局部修改蒙版
+  human_description:
+    en_US: 可选透明PNG，严格小于4MiB，与方向归一化后的参考图同尺寸；完全透明区域可修改。
+    zh_Hans: 可选透明PNG，严格小于4MiB，与方向归一化后的参考图同尺寸；完全透明区域可修改。
+  llm_description: 可选透明PNG，严格小于4MiB，与方向归一化后的参考图同尺寸；完全透明区域可修改。
+- name: prompt
+  type: string
+  required: true
+  form: llm
+  label:
+    en_US: Drawing instruction
+    zh_Hans: 修改指令
+  human_description:
+    en_US: 给定技术结构、连接或流程；修改时明确改动内容和保留内容。
+    zh_Hans: 给定技术结构、连接或流程；修改时明确改动内容和保留内容。
+  llm_description: 给定技术结构、连接或流程；修改时明确改动内容和保留内容。
+- name: reference_labels
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Reference labels
+    zh_Hans: 部件标号表
+  human_description:
+    en_US: 可选，逐行给定标号和名称；插件提示模型保持对应关系，不自动专业核验。
+    zh_Hans: 可选，逐行给定标号和名称；插件提示模型保持对应关系，不自动专业核验。
+  llm_description: 可选，逐行给定标号和名称；插件提示模型保持对应关系，不自动专业核验。
+- name: constraints
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Preservation constraints
+    zh_Hans: 必须保留的约束
+  human_description:
+    en_US: 视图、连接关系、位置、标号等必须保持的内容。
+    zh_Hans: 视图、连接关系、位置、标号等必须保持的内容。
+  llm_description: 视图、连接关系、位置、标号等必须保持的内容。
+- name: drawing_type
+  type: select
+  required: false
+  form: form
+  label:
+    en_US: Drawing type
+    zh_Hans: 附图类型
+  human_description:
+    en_US: 选择结构、流程、模块或电路模板。
+    zh_Hans: 选择结构、流程、模块或电路模板。
+  llm_description: 选择结构、流程、模块或电路模板。
+  default: structure
+  options:
+  - value: structure
+    label:
+      en_US: Structure
+      zh_Hans: 结构示意图
+  - value: flowchart
+    label:
+      en_US: Flowchart
+      zh_Hans: 流程图
+  - value: block_diagram
+    label:
+      en_US: Block diagram
+      zh_Hans: 模块框图
+  - value: circuit
+    label:
+      en_US: Circuit
+      zh_Hans: 电路示意图
+- name: size
+  type: select
+  required: false
+  form: form
+  label:
+    en_US: Output size
+    zh_Hans: 输出尺寸
+  human_description:
+    en_US: 标准输出像素尺寸；auto由模型确定，不保证修改后像素尺寸完全一致。
+    zh_Hans: 标准输出像素尺寸；auto由模型确定，不保证修改后像素尺寸完全一致。
+  llm_description: 标准输出像素尺寸；auto由模型确定，不保证修改后像素尺寸完全一致。
+  default: auto
+  options:
+  - value: auto
+    label:
+      en_US: auto
+      zh_Hans: auto
+  - value: 1024x1024
+    label:
+      en_US: 1024x1024
+      zh_Hans: 1024x1024
+  - value: 1536x1024
+    label:
+      en_US: 1536x1024
+      zh_Hans: 1536x1024
+  - value: 1024x1536
+    label:
+      en_US: 1024x1536
+      zh_Hans: 1024x1536
+- name: quality
+  type: select
+  required: false
+  form: form
+  label:
+    en_US: Quality
+    zh_Hans: 渲染质量
+  human_description:
+    en_US: 较高质量可能增加费用和延迟。
+    zh_Hans: 较高质量可能增加费用和延迟。
+  llm_description: 较高质量可能增加费用和延迟。
+  default: high
+  options:
+  - value: low
+    label:
+      en_US: Low
+      zh_Hans: 低
+  - value: medium
+    label:
+      en_US: Medium
+      zh_Hans: 中
+  - value: high
+    label:
+      en_US: High
+      zh_Hans: 高
+- name: complexity
+  type: select
+  required: false
+  form: form
+  label:
+    en_US: Complexity
+    zh_Hans: 规划复杂度
+  human_description:
+    en_US: 控制模型绘图前规划程度；简单局部修改建议低。
+    zh_Hans: 控制模型绘图前规划程度；简单局部修改建议低。
+  llm_description: 控制模型绘图前规划程度；简单局部修改建议低。
+  default: low
+  options:
+  - value: low
+    label:
+      en_US: Low
+      zh_Hans: 低
+  - value: medium
+    label:
+      en_US: Medium
+      zh_Hans: 中
+  - value: high
+    label:
+      en_US: High
+      zh_Hans: 高
+extra:
+  python:
+    source: tools/edit.py

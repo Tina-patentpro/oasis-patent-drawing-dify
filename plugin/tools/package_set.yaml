@@ -1,0 +1,48 @@
+identity:
+  name: patent_drawing_set_package
+  author: tina-patentpro
+  label:
+    en_US: 交付成套附图
+    zh_Hans: 交付成套附图
+description:
+  human:
+    en_US: 按当前规格和PNG实际SHA匹配全部图件，输出A4栅格PDF和含原件/矢量/清单的ZIP。文件校验不代表内容审阅。
+    zh_Hans: 按当前规格和PNG实际SHA匹配全部图件，输出A4栅格PDF和含原件/矢量/清单的ZIP。文件校验不代表内容审阅。
+  llm: 按当前规格和PNG实际SHA匹配全部图件，输出A4栅格PDF和含原件/矢量/清单的ZIP。文件校验不代表内容审阅。
+parameters:
+- name: plan_json
+  type: string
+  required: true
+  form: llm
+  label:
+    en_US: 图组计划
+    zh_Hans: 图组计划
+  human_description:
+    en_US: drawing-set-1图组合同，由对话流规划或导入；技术内容仍需核对。
+    zh_Hans: drawing-set-1图组合同，由对话流规划或导入；技术内容仍需核对。
+  llm_description: drawing-set-1图组合同，由对话流规划或导入；技术内容仍需核对。
+- name: manifest_json
+  type: string
+  required: true
+  form: llm
+  label:
+    en_US: 图组结果清单
+    zh_Hans: 图组结果清单
+  human_description:
+    en_US: drawing-set-result-1，包含每图规格SHA和PNG SHA。
+    zh_Hans: drawing-set-result-1，包含每图规格SHA和PNG SHA。
+  llm_description: drawing-set-result-1，包含每图规格SHA和PNG SHA。
+- name: images
+  type: files
+  required: true
+  form: llm
+  label:
+    en_US: 当前图组PNG
+    zh_Hans: 当前图组PNG
+  human_description:
+    en_US: 全部当前PNG文件，按实际字节SHA匹配。
+    zh_Hans: 全部当前PNG文件，按实际字节SHA匹配。
+  llm_description: 全部当前PNG文件，按实际字节SHA匹配。
+extra:
+  python:
+    source: tools/package_set.py

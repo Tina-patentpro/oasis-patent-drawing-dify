@@ -1,0 +1,141 @@
+identity:
+  name: patent_drawing_workspace
+  author: tina-patentpro
+  label:
+    en_US: Source-bound drawing workspace
+    zh_Hans: 图文来源与附图工作区
+description:
+  human:
+    en_US: Persistent source figures, typed plans, annotations and CN drawing checks.
+    zh_Hans: 原图修改补充/无图新建；分别报告供应商响应、实际图技术状态和待办。表达与引导须私有审阅，关联修改整套提交，拒绝或未知不自动重试；模型执行默认关闭。
+  llm: Use only the supplied material and system-bound context. Never invent source
+    facts or retry UNKNOWN operations.
+parameters:
+- name: action
+  type: string
+  required: true
+  form: llm
+  label:
+    en_US: Action
+    zh_Hans: 操作
+  llm_description: One of receive, stage, step, package, preview, preflight, review_status; bound by workflow.
+  human_description:
+    en_US: Action
+    zh_Hans: 操作
+- name: context_id
+  type: string
+  required: true
+  form: llm
+  label:
+    en_US: System conversation ID
+    zh_Hans: 系统会话ID
+  llm_description: Bind sys.conversation_id in the Chatflow; never infer from user
+    text.
+  human_description:
+    en_US: System conversation ID
+    zh_Hans: 系统会话ID
+- name: workspace_id
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Workspace ID
+    zh_Hans: 当前工作区ID
+  llm_description: Use the prior returned opaque workspace ID; not a path or URL.
+  human_description:
+    en_US: Workspace ID
+    zh_Hans: 当前工作区ID
+- name: query
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Query
+    zh_Hans: 用户指令
+  llm_description: Original user instruction.
+  human_description:
+    en_US: Query
+    zh_Hans: 用户指令
+- name: materials
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Materials
+    zh_Hans: 技术材料正文
+  llm_description: Original generation-visible disclosure text only.
+  human_description:
+    en_US: Materials
+    zh_Hans: 技术材料正文
+- name: files
+  type: files
+  required: false
+  form: llm
+  label:
+    en_US: Source files
+    zh_Hans: 原始交底文件
+  llm_description: Trusted uploaded PDF, PNG/JPEG or UTF-8 text; never evaluation
+    answers.
+  human_description:
+    en_US: Source files
+    zh_Hans: 原始交底文件
+- name: plan_json
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Reviewed plan JSON
+    zh_Hans: 审阅图单JSON
+  llm_description: drawing-set-2 plan, or explicit compatibility import of drawing-set-1.
+  human_description:
+    en_US: Reviewed plan JSON
+    zh_Hans: 审阅图单JSON
+- name: image_budget
+  type: number
+  required: false
+  default: 0
+  form: llm
+  label:
+    en_US: Approved image operation cap
+    zh_Hans: 已批准图片调用上限
+  llm_description: Cannot enable the operator's disabled model gate. Never infer spending
+    authorization.
+  human_description:
+    en_US: Approved image operation cap
+    zh_Hans: 已批准图片调用上限
+- name: patent_type
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Patent type
+    zh_Hans: 专利申请类型
+  llm_description: Explicit workflow selection invention, utility_model or design.
+  human_description:
+    en_US: Patent type
+    zh_Hans: 专利申请类型
+- name: technical_type
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Technical type
+    zh_Hans: 技术类型
+  llm_description: auto or a supported technical type explicitly selected in the Chatflow.
+  human_description:
+    en_US: Technical type
+    zh_Hans: 技术类型
+- name: application_stage
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Application stage
+    zh_Hans: 申请阶段
+  llm_description: Explicit workflow selection draft or filed; never silently change.
+  human_description:
+    en_US: Application stage
+    zh_Hans: 申请阶段
+extra:
+  python:
+    source: tools/workspace.py

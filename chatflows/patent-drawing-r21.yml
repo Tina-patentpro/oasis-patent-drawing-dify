@@ -1,0 +1,1714 @@
+version: 0.7.0
+kind: app
+app:
+  name: 专利附图集-GPT-0.3.9-R21-工程示意验证
+  mode: advanced-chat
+  description: 原图修改补充、无图新建、按技术类型规划、分层标注、中国附图规则核查；工程候选，非申请就绪。
+  icon: 📐
+  icon_type: emoji
+  icon_background: '#E0F2FE'
+  use_icon_as_answer_icon: false
+dependencies:
+- type: package
+  value:
+    plugin_unique_identifier: tina-patentpro/oasisintwrite_patent_drawing:0.3.9@79455235db272dc99ef3e9201178f0efa355b9e3bf8caef8adce05c813df7cf4
+workflow:
+  graph:
+    nodes:
+    - id: q_start
+      type: custom
+      position:
+        x: 0
+        y: 0
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: start
+        title: 交底与用途
+        desc: ''
+        selected: false
+        variables:
+        - variable: materials
+          label: 交底正文（已有PDF可留空）
+          type: paragraph
+          required: false
+          max_length: 64000
+          default: ''
+        - variable: plan_json
+          label: 审阅图单JSON（高级验证，可留空）
+          type: paragraph
+          required: false
+          max_length: 400000
+          default: ''
+        - variable: patent_type
+          label: 专利申请类型
+          type: select
+          required: true
+          options:
+          - 发明
+          - 实用新型
+          - 外观设计
+          default: 发明
+        - variable: technical_type
+          label: 技术类型
+          type: select
+          required: true
+          options:
+          - 自动识别
+          - 机械结构
+          - 电气电路
+          - 机电结构
+          - 软件/计算机方法
+          - 通信
+          - 制造工艺
+          - 化学材料
+          - 生物医学
+          - 半导体
+          default: 自动识别
+        - variable: application_stage
+          label: 申请阶段
+          type: select
+          required: true
+          options:
+          - 申请前
+          - 已申请
+          default: 申请前
+        - variable: image_budget
+          label: 图集附加调用上限（0按操作员授权）
+          type: number
+          required: false
+          default: 0
+    - id: q_types
+      type: custom
+      position:
+        x: 310
+        y: 0
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: code
+        title: 绑定申请和技术类型
+        desc: ''
+        selected: false
+        code_language: python3
+        code: "\"\"\"Pure Dify code-node adapters; no credentials, HTTP or model dispatch.\"\
+          \"\"\nimport json\n\n\ndef result(items):\n    if not isinstance(items,\
+          \ list): raise ValueError('工具结果应为JSON数组')\n    rows = [x for x in items\
+          \ if isinstance(x, dict) and 'workspace_id' in x]\n    if len(rows) != 1:\
+          \ raise ValueError('缺少唯一工作区结果；未自动重试')\n    x = rows[0]\n    todos = {}\n\
+          \    for field in ['failed_feature_ids', 'unknown_feature_ids', 'unreviewed_view_ids']:\n\
+          \        value = x.get(field, [])\n        if not isinstance(value, list)\
+          \ or any(not isinstance(v, str) for v in value):\n            raise ValueError('待办字段应为字符串数组：'\
+          \ + field)\n        todos[field] = value\n    unknown = todos['unknown_feature_ids']\n\
+          \    if any(value.count('/') != 1 or not all(value.split('/')) for value\
+          \ in unknown):\n        raise ValueError('实际图待确认特征应使用视图/特征标识：unknown_feature_ids')\n\
+          \    independent_source = bool(x.get('deferred_blocking_state')) and x.get('route')\
+          \ == 'execute'\n    missing = x.get('missing_features', [])\n    if not\
+          \ isinstance(missing, list) or any(not isinstance(v, str) or not v for v\
+          \ in missing):\n        raise ValueError('引导待补充字段应为字符串数组：missing_features')\n\
+          \    guide_blocked = bool(missing) and not independent_source\n    relation_review\
+          \ = x.get('pending_action') == 'professional_relation_review' and not independent_source\n\
+          \    actual_unknown = bool(unknown) and not independent_source\n    supplier\
+          \ = x.get('supplier_state')\n    supplier_block = supplier in ('provider_rejected',\
+          \ 'result_unknown')\n    blocked = (bool(x.get('blocking_state')) or supplier_block\
+          \ or x.get('semantic_state') in {'FAIL','UNKNOWN'}\n               or guide_blocked\
+          \ or relation_review\n               or bool(todos['failed_feature_ids'])\n\
+          \               or actual_unknown\n               or (bool(todos['unreviewed_view_ids'])\
+          \ and not independent_source)\n               or (x.get('pending_action')\
+          \ in {'prepare_guide','private_review','actual_review'} and not independent_source))\n\
+          \    message=x.get('message', '')\n    if supplier_block:\n        reason\
+          \ = '供应商拒绝本次请求' if supplier=='provider_rejected' else '供应商请求结果未知'\n    \
+          \    if reason not in message:\n            message += '\\n'+reason+'，请核对原始记录。'\n\
+          \    if x.get('blocking_state') == 'local_preflight_rejected' and '未发送图像请求'\
+          \ not in message:\n        message += '\\n本地预算前置检查未通过，未发送图像请求。'\n    if\
+          \ actual_unknown and not all(value in message for value in unknown):\n \
+          \       message += '\\n实际图待确认特征：' + '、'.join(unknown) + '。'\n    if relation_review\
+          \ and '专业审阅' not in message:\n        message += '\\n局部连接示意需绑定原交底和本版引导图的专业审阅回执。'\n\
+          \    if guide_blocked:\n        names={'pin-hole-fit':'销孔配合','rib-insertion-contact':'入孔肋接触',\n\
+          \               'channel-contour':'通道轮廓','channel-partition-solids':'实体分隔壁',\n\
+          \               'source-fidelity':'来源形体保真','cable-side-opening':'电缆侧焊接开口'}\n\
+          \        detail='、'.join(names.get(f,f)+'（'+f+'）'if f in names else f for\
+          \ f in missing)\n        message += '\\n引导待补充，视图 '+str(x.get('blocked_view')or'待定位')+'：'+detail+'。'\n\
+          \    output = {'workspace_id': x['workspace_id'], 'route': 'reply' if blocked\
+          \ else x.get('route', 'reply'),\n            'done': 'yes' if blocked else\
+          \ x.get('done', 'no'), 'message': message,\n            'missing_features':\
+          \ missing,\n            **todos,\n            **{k:str(x.get(k) or '') for\
+          \ k in ['technical_status','blocking_state','blocked_view','resume_action','deferred_blocking_state','deferred_blocked_view',\n\
+          \                                             'expression_mode','supplier_state','semantic_state','pending_action']}}\n\
+          \    if supplier_block:\n        output['blocking_state'] = output['blocking_state']\
+          \ or supplier\n        output['pending_action'] = output['pending_action']\
+          \ or 'inspect_original'\n        output['resume_action'] = output['resume_action']\
+          \ or (\n            'qualifying_evidence_and_private_recovery' if supplier=='provider_rejected'\
+          \ else 'inspect_original_result')\n    if guide_blocked:\n        output['blocking_state']=output['blocking_state']or'needs_source'\n\
+          \        output['pending_action']=output['pending_action']or'prepare_guide'\n\
+          \    if relation_review:\n        output['blocking_state'] = output['blocking_state']\
+          \ or 'awaiting_guide_review'\n        output['resume_action'] = output['resume_action']\
+          \ or 'professional_relation_review'\n    if actual_unknown:\n        output['blocked_view']\
+          \ = output['blocked_view'] or unknown[0].split('/')[0]\n        output['blocking_state']\
+          \ = output['blocking_state'] or 'awaiting_visual_review'\n        output['pending_action']\
+          \ = output['pending_action'] or 'actual_review'\n    return output\n\n\n\
+          def loop_outcome(step_done, review_done):\n    return {'done': 'no' if step_done\
+          \ == review_done == 'no' else 'yes'}\n\n\ndef inputs(patent_type, technical_type,\
+          \ application_stage):\n    patents = {'发明': 'invention', '实用新型': 'utility_model',\
+          \ '外观设计': 'design'}\n    technologies = {'自动识别': 'auto', '机械结构': 'mechanical',\
+          \ '电气电路': 'electrical',\n        '机电结构': 'mechanical,electrical', '软件/计算机方法':\
+          \ 'computer_method', '通信': 'communication', '制造工艺': 'manufacturing_process',\n\
+          \        '化学材料': 'chemical_material', '生物医学': 'bio_medical', '半导体': 'semiconductor'}\n\
+          \    stages = {'申请前': 'draft', '已申请': 'filed'}\n    if patent_type not in\
+          \ patents or technical_type not in technologies or application_stage not\
+          \ in stages:\n        raise ValueError('请选择实际申请类型、技术类型和申请阶段')\n    return\
+          \ {'patent_type': patents[patent_type], 'technical_type': technologies[technical_type],\
+          \ 'application_stage': stages[application_stage]}\n\n\ndef main(patent_type,technical_type,application_stage):\n\
+          \ return inputs(patent_type,technical_type,application_stage)\n"
+        variables:
+        - variable: patent_type
+          value_selector:
+          - q_start
+          - patent_type
+        - variable: technical_type
+          value_selector:
+          - q_start
+          - technical_type
+        - variable: application_stage
+          value_selector:
+          - q_start
+          - application_stage
+        outputs:
+          patent_type:
+            type: string
+            children: null
+          technical_type:
+            type: string
+            children: null
+          application_stage:
+            type: string
+            children: null
+    - id: q_receive
+      type: custom
+      position:
+        x: 620
+        y: 0
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: tool
+        title: 原图修改补充／无图新建规划
+        desc: ''
+        selected: false
+        provider_type: builtin
+        provider_id: tina-patentpro/oasisintwrite_patent_drawing/oasisintwrite_patent_drawing
+        provider_name: tina-patentpro/oasisintwrite_patent_drawing/oasisintwrite_patent_drawing
+        tool_name: patent_drawing_workspace
+        tool_label: 专利附图工作区
+        tool_configurations: {}
+        tool_parameters:
+          context_id:
+            type: variable
+            value:
+            - sys
+            - conversation_id
+          workspace_id:
+            type: variable
+            value:
+            - conversation
+            - drawing_workspace
+          query:
+            type: variable
+            value:
+            - sys
+            - query
+          files:
+            type: variable
+            value:
+            - sys
+            - files
+          materials:
+            type: variable
+            value:
+            - q_start
+            - materials
+          plan_json:
+            type: variable
+            value:
+            - q_start
+            - plan_json
+          image_budget:
+            type: variable
+            value:
+            - q_start
+            - image_budget
+          patent_type:
+            type: variable
+            value:
+            - q_types
+            - patent_type
+          technical_type:
+            type: variable
+            value:
+            - q_types
+            - technical_type
+          application_stage:
+            type: variable
+            value:
+            - q_types
+            - application_stage
+          action:
+            type: mixed
+            value: receive
+        tool_node_version: '2'
+        plugin_unique_identifier: tina-patentpro/oasisintwrite_patent_drawing:0.3.9@79455235db272dc99ef3e9201178f0efa355b9e3bf8caef8adce05c813df7cf4
+        credential_id: null
+        is_team_authorization: true
+        retry_config:
+          retry_enabled: false
+          max_retries: 0
+          retry_interval: 1000
+    - id: q_result
+      type: custom
+      position:
+        x: 930
+        y: 0
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: code
+        title: 读取工作区与任务状态
+        desc: ''
+        selected: false
+        code_language: python3
+        code: "\"\"\"Pure Dify code-node adapters; no credentials, HTTP or model dispatch.\"\
+          \"\"\nimport json\n\n\ndef result(items):\n    if not isinstance(items,\
+          \ list): raise ValueError('工具结果应为JSON数组')\n    rows = [x for x in items\
+          \ if isinstance(x, dict) and 'workspace_id' in x]\n    if len(rows) != 1:\
+          \ raise ValueError('缺少唯一工作区结果；未自动重试')\n    x = rows[0]\n    todos = {}\n\
+          \    for field in ['failed_feature_ids', 'unknown_feature_ids', 'unreviewed_view_ids']:\n\
+          \        value = x.get(field, [])\n        if not isinstance(value, list)\
+          \ or any(not isinstance(v, str) for v in value):\n            raise ValueError('待办字段应为字符串数组：'\
+          \ + field)\n        todos[field] = value\n    unknown = todos['unknown_feature_ids']\n\
+          \    if any(value.count('/') != 1 or not all(value.split('/')) for value\
+          \ in unknown):\n        raise ValueError('实际图待确认特征应使用视图/特征标识：unknown_feature_ids')\n\
+          \    independent_source = bool(x.get('deferred_blocking_state')) and x.get('route')\
+          \ == 'execute'\n    missing = x.get('missing_features', [])\n    if not\
+          \ isinstance(missing, list) or any(not isinstance(v, str) or not v for v\
+          \ in missing):\n        raise ValueError('引导待补充字段应为字符串数组：missing_features')\n\
+          \    guide_blocked = bool(missing) and not independent_source\n    relation_review\
+          \ = x.get('pending_action') == 'professional_relation_review' and not independent_source\n\
+          \    actual_unknown = bool(unknown) and not independent_source\n    supplier\
+          \ = x.get('supplier_state')\n    supplier_block = supplier in ('provider_rejected',\
+          \ 'result_unknown')\n    blocked = (bool(x.get('blocking_state')) or supplier_block\
+          \ or x.get('semantic_state') in {'FAIL','UNKNOWN'}\n               or guide_blocked\
+          \ or relation_review\n               or bool(todos['failed_feature_ids'])\n\
+          \               or actual_unknown\n               or (bool(todos['unreviewed_view_ids'])\
+          \ and not independent_source)\n               or (x.get('pending_action')\
+          \ in {'prepare_guide','private_review','actual_review'} and not independent_source))\n\
+          \    message=x.get('message', '')\n    if supplier_block:\n        reason\
+          \ = '供应商拒绝本次请求' if supplier=='provider_rejected' else '供应商请求结果未知'\n    \
+          \    if reason not in message:\n            message += '\\n'+reason+'，请核对原始记录。'\n\
+          \    if x.get('blocking_state') == 'local_preflight_rejected' and '未发送图像请求'\
+          \ not in message:\n        message += '\\n本地预算前置检查未通过，未发送图像请求。'\n    if\
+          \ actual_unknown and not all(value in message for value in unknown):\n \
+          \       message += '\\n实际图待确认特征：' + '、'.join(unknown) + '。'\n    if relation_review\
+          \ and '专业审阅' not in message:\n        message += '\\n局部连接示意需绑定原交底和本版引导图的专业审阅回执。'\n\
+          \    if guide_blocked:\n        names={'pin-hole-fit':'销孔配合','rib-insertion-contact':'入孔肋接触',\n\
+          \               'channel-contour':'通道轮廓','channel-partition-solids':'实体分隔壁',\n\
+          \               'source-fidelity':'来源形体保真','cable-side-opening':'电缆侧焊接开口'}\n\
+          \        detail='、'.join(names.get(f,f)+'（'+f+'）'if f in names else f for\
+          \ f in missing)\n        message += '\\n引导待补充，视图 '+str(x.get('blocked_view')or'待定位')+'：'+detail+'。'\n\
+          \    output = {'workspace_id': x['workspace_id'], 'route': 'reply' if blocked\
+          \ else x.get('route', 'reply'),\n            'done': 'yes' if blocked else\
+          \ x.get('done', 'no'), 'message': message,\n            'missing_features':\
+          \ missing,\n            **todos,\n            **{k:str(x.get(k) or '') for\
+          \ k in ['technical_status','blocking_state','blocked_view','resume_action','deferred_blocking_state','deferred_blocked_view',\n\
+          \                                             'expression_mode','supplier_state','semantic_state','pending_action']}}\n\
+          \    if supplier_block:\n        output['blocking_state'] = output['blocking_state']\
+          \ or supplier\n        output['pending_action'] = output['pending_action']\
+          \ or 'inspect_original'\n        output['resume_action'] = output['resume_action']\
+          \ or (\n            'qualifying_evidence_and_private_recovery' if supplier=='provider_rejected'\
+          \ else 'inspect_original_result')\n    if guide_blocked:\n        output['blocking_state']=output['blocking_state']or'needs_source'\n\
+          \        output['pending_action']=output['pending_action']or'prepare_guide'\n\
+          \    if relation_review:\n        output['blocking_state'] = output['blocking_state']\
+          \ or 'awaiting_guide_review'\n        output['resume_action'] = output['resume_action']\
+          \ or 'professional_relation_review'\n    if actual_unknown:\n        output['blocked_view']\
+          \ = output['blocked_view'] or unknown[0].split('/')[0]\n        output['blocking_state']\
+          \ = output['blocking_state'] or 'awaiting_visual_review'\n        output['pending_action']\
+          \ = output['pending_action'] or 'actual_review'\n    return output\n\n\n\
+          def loop_outcome(step_done, review_done):\n    return {'done': 'no' if step_done\
+          \ == review_done == 'no' else 'yes'}\n\n\ndef inputs(patent_type, technical_type,\
+          \ application_stage):\n    patents = {'发明': 'invention', '实用新型': 'utility_model',\
+          \ '外观设计': 'design'}\n    technologies = {'自动识别': 'auto', '机械结构': 'mechanical',\
+          \ '电气电路': 'electrical',\n        '机电结构': 'mechanical,electrical', '软件/计算机方法':\
+          \ 'computer_method', '通信': 'communication', '制造工艺': 'manufacturing_process',\n\
+          \        '化学材料': 'chemical_material', '生物医学': 'bio_medical', '半导体': 'semiconductor'}\n\
+          \    stages = {'申请前': 'draft', '已申请': 'filed'}\n    if patent_type not in\
+          \ patents or technical_type not in technologies or application_stage not\
+          \ in stages:\n        raise ValueError('请选择实际申请类型、技术类型和申请阶段')\n    return\
+          \ {'patent_type': patents[patent_type], 'technical_type': technologies[technical_type],\
+          \ 'application_stage': stages[application_stage]}\n\n\ndef main(items):\n\
+          \ return result(items)\n"
+        variables:
+        - variable: items
+          value_selector:
+          - q_receive
+          - json
+        outputs:
+          workspace_id:
+            type: string
+            children: null
+          route:
+            type: string
+            children: null
+          done:
+            type: string
+            children: null
+          message:
+            type: string
+            children: null
+          technical_status:
+            type: string
+            children: null
+          blocking_state:
+            type: string
+            children: null
+          blocked_view:
+            type: string
+            children: null
+          resume_action:
+            type: string
+            children: null
+          deferred_blocking_state:
+            type: string
+            children: null
+          deferred_blocked_view:
+            type: string
+            children: null
+          expression_mode:
+            type: string
+            children: null
+          supplier_state:
+            type: string
+            children: null
+          semantic_state:
+            type: string
+            children: null
+          pending_action:
+            type: string
+            children: null
+          failed_feature_ids:
+            type: array[string]
+            children: null
+          unknown_feature_ids:
+            type: array[string]
+            children: null
+          unreviewed_view_ids:
+            type: array[string]
+            children: null
+          missing_features:
+            type: array[string]
+            children: null
+    - id: q_remember
+      type: custom
+      position:
+        x: 1240
+        y: 0
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: assigner
+        title: 保存本会话工作区引用
+        desc: ''
+        selected: false
+        version: '2'
+        items:
+        - variable_selector:
+          - conversation
+          - drawing_workspace
+          input_type: variable
+          operation: over-write
+          value:
+          - q_result
+          - workspace_id
+    - id: q_preflight
+      type: custom
+      position:
+        x: 1550
+        y: 0
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: tool
+        title: 来源与引导前置检查
+        desc: ''
+        selected: false
+        provider_type: builtin
+        provider_id: tina-patentpro/oasisintwrite_patent_drawing/oasisintwrite_patent_drawing
+        provider_name: tina-patentpro/oasisintwrite_patent_drawing/oasisintwrite_patent_drawing
+        tool_name: patent_drawing_workspace
+        tool_label: 专利附图工作区
+        tool_configurations: {}
+        tool_parameters:
+          context_id:
+            type: variable
+            value:
+            - sys
+            - conversation_id
+          workspace_id:
+            type: variable
+            value:
+            - q_result
+            - workspace_id
+          action:
+            type: mixed
+            value: preflight
+        tool_node_version: '2'
+        plugin_unique_identifier: tina-patentpro/oasisintwrite_patent_drawing:0.3.9@79455235db272dc99ef3e9201178f0efa355b9e3bf8caef8adce05c813df7cf4
+        credential_id: null
+        is_team_authorization: true
+        retry_config:
+          retry_enabled: false
+          max_retries: 0
+          retry_interval: 1000
+    - id: q_preflight_result
+      type: custom
+      position:
+        x: 0
+        y: 550
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: code
+        title: 读取前置阻断
+        desc: ''
+        selected: false
+        code_language: python3
+        code: "\"\"\"Pure Dify code-node adapters; no credentials, HTTP or model dispatch.\"\
+          \"\"\nimport json\n\n\ndef result(items):\n    if not isinstance(items,\
+          \ list): raise ValueError('工具结果应为JSON数组')\n    rows = [x for x in items\
+          \ if isinstance(x, dict) and 'workspace_id' in x]\n    if len(rows) != 1:\
+          \ raise ValueError('缺少唯一工作区结果；未自动重试')\n    x = rows[0]\n    todos = {}\n\
+          \    for field in ['failed_feature_ids', 'unknown_feature_ids', 'unreviewed_view_ids']:\n\
+          \        value = x.get(field, [])\n        if not isinstance(value, list)\
+          \ or any(not isinstance(v, str) for v in value):\n            raise ValueError('待办字段应为字符串数组：'\
+          \ + field)\n        todos[field] = value\n    unknown = todos['unknown_feature_ids']\n\
+          \    if any(value.count('/') != 1 or not all(value.split('/')) for value\
+          \ in unknown):\n        raise ValueError('实际图待确认特征应使用视图/特征标识：unknown_feature_ids')\n\
+          \    independent_source = bool(x.get('deferred_blocking_state')) and x.get('route')\
+          \ == 'execute'\n    missing = x.get('missing_features', [])\n    if not\
+          \ isinstance(missing, list) or any(not isinstance(v, str) or not v for v\
+          \ in missing):\n        raise ValueError('引导待补充字段应为字符串数组：missing_features')\n\
+          \    guide_blocked = bool(missing) and not independent_source\n    relation_review\
+          \ = x.get('pending_action') == 'professional_relation_review' and not independent_source\n\
+          \    actual_unknown = bool(unknown) and not independent_source\n    supplier\
+          \ = x.get('supplier_state')\n    supplier_block = supplier in ('provider_rejected',\
+          \ 'result_unknown')\n    blocked = (bool(x.get('blocking_state')) or supplier_block\
+          \ or x.get('semantic_state') in {'FAIL','UNKNOWN'}\n               or guide_blocked\
+          \ or relation_review\n               or bool(todos['failed_feature_ids'])\n\
+          \               or actual_unknown\n               or (bool(todos['unreviewed_view_ids'])\
+          \ and not independent_source)\n               or (x.get('pending_action')\
+          \ in {'prepare_guide','private_review','actual_review'} and not independent_source))\n\
+          \    message=x.get('message', '')\n    if supplier_block:\n        reason\
+          \ = '供应商拒绝本次请求' if supplier=='provider_rejected' else '供应商请求结果未知'\n    \
+          \    if reason not in message:\n            message += '\\n'+reason+'，请核对原始记录。'\n\
+          \    if x.get('blocking_state') == 'local_preflight_rejected' and '未发送图像请求'\
+          \ not in message:\n        message += '\\n本地预算前置检查未通过，未发送图像请求。'\n    if\
+          \ actual_unknown and not all(value in message for value in unknown):\n \
+          \       message += '\\n实际图待确认特征：' + '、'.join(unknown) + '。'\n    if relation_review\
+          \ and '专业审阅' not in message:\n        message += '\\n局部连接示意需绑定原交底和本版引导图的专业审阅回执。'\n\
+          \    if guide_blocked:\n        names={'pin-hole-fit':'销孔配合','rib-insertion-contact':'入孔肋接触',\n\
+          \               'channel-contour':'通道轮廓','channel-partition-solids':'实体分隔壁',\n\
+          \               'source-fidelity':'来源形体保真','cable-side-opening':'电缆侧焊接开口'}\n\
+          \        detail='、'.join(names.get(f,f)+'（'+f+'）'if f in names else f for\
+          \ f in missing)\n        message += '\\n引导待补充，视图 '+str(x.get('blocked_view')or'待定位')+'：'+detail+'。'\n\
+          \    output = {'workspace_id': x['workspace_id'], 'route': 'reply' if blocked\
+          \ else x.get('route', 'reply'),\n            'done': 'yes' if blocked else\
+          \ x.get('done', 'no'), 'message': message,\n            'missing_features':\
+          \ missing,\n            **todos,\n            **{k:str(x.get(k) or '') for\
+          \ k in ['technical_status','blocking_state','blocked_view','resume_action','deferred_blocking_state','deferred_blocked_view',\n\
+          \                                             'expression_mode','supplier_state','semantic_state','pending_action']}}\n\
+          \    if supplier_block:\n        output['blocking_state'] = output['blocking_state']\
+          \ or supplier\n        output['pending_action'] = output['pending_action']\
+          \ or 'inspect_original'\n        output['resume_action'] = output['resume_action']\
+          \ or (\n            'qualifying_evidence_and_private_recovery' if supplier=='provider_rejected'\
+          \ else 'inspect_original_result')\n    if guide_blocked:\n        output['blocking_state']=output['blocking_state']or'needs_source'\n\
+          \        output['pending_action']=output['pending_action']or'prepare_guide'\n\
+          \    if relation_review:\n        output['blocking_state'] = output['blocking_state']\
+          \ or 'awaiting_guide_review'\n        output['resume_action'] = output['resume_action']\
+          \ or 'professional_relation_review'\n    if actual_unknown:\n        output['blocked_view']\
+          \ = output['blocked_view'] or unknown[0].split('/')[0]\n        output['blocking_state']\
+          \ = output['blocking_state'] or 'awaiting_visual_review'\n        output['pending_action']\
+          \ = output['pending_action'] or 'actual_review'\n    return output\n\n\n\
+          def loop_outcome(step_done, review_done):\n    return {'done': 'no' if step_done\
+          \ == review_done == 'no' else 'yes'}\n\n\ndef inputs(patent_type, technical_type,\
+          \ application_stage):\n    patents = {'发明': 'invention', '实用新型': 'utility_model',\
+          \ '外观设计': 'design'}\n    technologies = {'自动识别': 'auto', '机械结构': 'mechanical',\
+          \ '电气电路': 'electrical',\n        '机电结构': 'mechanical,electrical', '软件/计算机方法':\
+          \ 'computer_method', '通信': 'communication', '制造工艺': 'manufacturing_process',\n\
+          \        '化学材料': 'chemical_material', '生物医学': 'bio_medical', '半导体': 'semiconductor'}\n\
+          \    stages = {'申请前': 'draft', '已申请': 'filed'}\n    if patent_type not in\
+          \ patents or technical_type not in technologies or application_stage not\
+          \ in stages:\n        raise ValueError('请选择实际申请类型、技术类型和申请阶段')\n    return\
+          \ {'patent_type': patents[patent_type], 'technical_type': technologies[technical_type],\
+          \ 'application_stage': stages[application_stage]}\n\n\ndef main(items):\n\
+          \ return result(items)\n"
+        variables:
+        - variable: items
+          value_selector:
+          - q_preflight
+          - json
+        outputs:
+          workspace_id:
+            type: string
+            children: null
+          route:
+            type: string
+            children: null
+          done:
+            type: string
+            children: null
+          message:
+            type: string
+            children: null
+          technical_status:
+            type: string
+            children: null
+          blocking_state:
+            type: string
+            children: null
+          blocked_view:
+            type: string
+            children: null
+          resume_action:
+            type: string
+            children: null
+          deferred_blocking_state:
+            type: string
+            children: null
+          deferred_blocked_view:
+            type: string
+            children: null
+          expression_mode:
+            type: string
+            children: null
+          supplier_state:
+            type: string
+            children: null
+          semantic_state:
+            type: string
+            children: null
+          pending_action:
+            type: string
+            children: null
+          failed_feature_ids:
+            type: array[string]
+            children: null
+          unknown_feature_ids:
+            type: array[string]
+            children: null
+          unreviewed_view_ids:
+            type: array[string]
+            children: null
+          missing_features:
+            type: array[string]
+            children: null
+    - id: q_switch
+      type: custom
+      position:
+        x: 310
+        y: 550
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: if-else
+        title: 预览或执行
+        desc: ''
+        selected: false
+        cases:
+        - case_id: execute
+          logical_operator: and
+          conditions:
+          - id: user-requested-execution
+            variable_selector:
+            - q_result
+            - route
+            varType: string
+            comparison_operator: is
+            value: execute
+          - id: run-plan
+            variable_selector:
+            - q_preflight_result
+            - route
+            varType: string
+            comparison_operator: is
+            value: execute
+    - id: q_preview
+      type: custom
+      position:
+        x: 620
+        y: 550
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: answer
+        title: 来源图文与图单
+        desc: ''
+        selected: false
+        answer: '{{#q_receive.files#}}
+
+
+          {{#q_result.message#}}
+
+          {{#q_preflight_result.message#}}'
+    - id: q_loop
+      type: custom
+      position:
+        x: 930
+        y: 550
+      width: 1200
+      height: 450
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: loop
+        title: 按图单逐图执行
+        desc: ''
+        selected: false
+        start_node_id: q_loop_start
+        loop_count: 24
+        break_conditions:
+        - id: completed-set
+          variable_selector:
+          - q_loop
+          - done
+          varType: string
+          comparison_operator: is
+          value: 'yes'
+        logical_operator: and
+        loop_variables:
+        - label: workspace_id
+          var_type: string
+          value_type: variable
+          value:
+          - q_result
+          - workspace_id
+        - label: done
+          var_type: string
+          value_type: constant
+          value: 'no'
+        width: 1200
+        height: 450
+    - id: q_loop_start
+      type: custom-loop-start
+      position:
+        x: 520
+        y: 90
+      width: 44
+      height: 48
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: loop-start
+        title: 开始当前图
+        desc: ''
+        selected: false
+        isInLoop: true
+        loop_id: q_loop
+      parentId: q_loop
+      extent: parent
+      selectable: false
+      draggable: false
+      zIndex: 1002
+    - id: q_step
+      type: custom
+      position:
+        x: 780
+        y: 90
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: tool
+        title: 执行并持久保存当前图
+        desc: ''
+        selected: false
+        provider_type: builtin
+        provider_id: tina-patentpro/oasisintwrite_patent_drawing/oasisintwrite_patent_drawing
+        provider_name: tina-patentpro/oasisintwrite_patent_drawing/oasisintwrite_patent_drawing
+        tool_name: patent_drawing_workspace
+        tool_label: 专利附图工作区
+        tool_configurations: {}
+        tool_parameters:
+          context_id:
+            type: variable
+            value:
+            - sys
+            - conversation_id
+          workspace_id:
+            type: variable
+            value:
+            - q_loop
+            - workspace_id
+          action:
+            type: mixed
+            value: step
+        tool_node_version: '2'
+        plugin_unique_identifier: tina-patentpro/oasisintwrite_patent_drawing:0.3.9@79455235db272dc99ef3e9201178f0efa355b9e3bf8caef8adce05c813df7cf4
+        credential_id: null
+        is_team_authorization: true
+        retry_config:
+          retry_enabled: false
+          max_retries: 0
+          retry_interval: 1000
+        isInLoop: true
+        loop_id: q_loop
+      parentId: q_loop
+      extent: parent
+      zIndex: 1002
+    - id: q_review
+      type: custom
+      position:
+        x: 1040
+        y: 90
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: tool
+        title: 核对本图实际技术状态
+        desc: ''
+        selected: false
+        provider_type: builtin
+        provider_id: tina-patentpro/oasisintwrite_patent_drawing/oasisintwrite_patent_drawing
+        provider_name: tina-patentpro/oasisintwrite_patent_drawing/oasisintwrite_patent_drawing
+        tool_name: patent_drawing_workspace
+        tool_label: 专利附图工作区
+        tool_configurations: {}
+        tool_parameters:
+          context_id:
+            type: variable
+            value:
+            - sys
+            - conversation_id
+          workspace_id:
+            type: variable
+            value:
+            - q_loop
+            - workspace_id
+          action:
+            type: mixed
+            value: review_status
+        tool_node_version: '2'
+        plugin_unique_identifier: tina-patentpro/oasisintwrite_patent_drawing:0.3.9@79455235db272dc99ef3e9201178f0efa355b9e3bf8caef8adce05c813df7cf4
+        credential_id: null
+        is_team_authorization: true
+        retry_config:
+          retry_enabled: false
+          max_retries: 0
+          retry_interval: 1000
+        isInLoop: true
+        loop_id: q_loop
+      parentId: q_loop
+      extent: parent
+      zIndex: 1002
+    - id: q_review_result
+      type: custom
+      position:
+        x: 1300
+        y: 90
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: code
+        title: 读取技术阻断
+        desc: ''
+        selected: false
+        code_language: python3
+        code: "\"\"\"Pure Dify code-node adapters; no credentials, HTTP or model dispatch.\"\
+          \"\"\nimport json\n\n\ndef result(items):\n    if not isinstance(items,\
+          \ list): raise ValueError('工具结果应为JSON数组')\n    rows = [x for x in items\
+          \ if isinstance(x, dict) and 'workspace_id' in x]\n    if len(rows) != 1:\
+          \ raise ValueError('缺少唯一工作区结果；未自动重试')\n    x = rows[0]\n    todos = {}\n\
+          \    for field in ['failed_feature_ids', 'unknown_feature_ids', 'unreviewed_view_ids']:\n\
+          \        value = x.get(field, [])\n        if not isinstance(value, list)\
+          \ or any(not isinstance(v, str) for v in value):\n            raise ValueError('待办字段应为字符串数组：'\
+          \ + field)\n        todos[field] = value\n    unknown = todos['unknown_feature_ids']\n\
+          \    if any(value.count('/') != 1 or not all(value.split('/')) for value\
+          \ in unknown):\n        raise ValueError('实际图待确认特征应使用视图/特征标识：unknown_feature_ids')\n\
+          \    independent_source = bool(x.get('deferred_blocking_state')) and x.get('route')\
+          \ == 'execute'\n    missing = x.get('missing_features', [])\n    if not\
+          \ isinstance(missing, list) or any(not isinstance(v, str) or not v for v\
+          \ in missing):\n        raise ValueError('引导待补充字段应为字符串数组：missing_features')\n\
+          \    guide_blocked = bool(missing) and not independent_source\n    relation_review\
+          \ = x.get('pending_action') == 'professional_relation_review' and not independent_source\n\
+          \    actual_unknown = bool(unknown) and not independent_source\n    supplier\
+          \ = x.get('supplier_state')\n    supplier_block = supplier in ('provider_rejected',\
+          \ 'result_unknown')\n    blocked = (bool(x.get('blocking_state')) or supplier_block\
+          \ or x.get('semantic_state') in {'FAIL','UNKNOWN'}\n               or guide_blocked\
+          \ or relation_review\n               or bool(todos['failed_feature_ids'])\n\
+          \               or actual_unknown\n               or (bool(todos['unreviewed_view_ids'])\
+          \ and not independent_source)\n               or (x.get('pending_action')\
+          \ in {'prepare_guide','private_review','actual_review'} and not independent_source))\n\
+          \    message=x.get('message', '')\n    if supplier_block:\n        reason\
+          \ = '供应商拒绝本次请求' if supplier=='provider_rejected' else '供应商请求结果未知'\n    \
+          \    if reason not in message:\n            message += '\\n'+reason+'，请核对原始记录。'\n\
+          \    if x.get('blocking_state') == 'local_preflight_rejected' and '未发送图像请求'\
+          \ not in message:\n        message += '\\n本地预算前置检查未通过，未发送图像请求。'\n    if\
+          \ actual_unknown and not all(value in message for value in unknown):\n \
+          \       message += '\\n实际图待确认特征：' + '、'.join(unknown) + '。'\n    if relation_review\
+          \ and '专业审阅' not in message:\n        message += '\\n局部连接示意需绑定原交底和本版引导图的专业审阅回执。'\n\
+          \    if guide_blocked:\n        names={'pin-hole-fit':'销孔配合','rib-insertion-contact':'入孔肋接触',\n\
+          \               'channel-contour':'通道轮廓','channel-partition-solids':'实体分隔壁',\n\
+          \               'source-fidelity':'来源形体保真','cable-side-opening':'电缆侧焊接开口'}\n\
+          \        detail='、'.join(names.get(f,f)+'（'+f+'）'if f in names else f for\
+          \ f in missing)\n        message += '\\n引导待补充，视图 '+str(x.get('blocked_view')or'待定位')+'：'+detail+'。'\n\
+          \    output = {'workspace_id': x['workspace_id'], 'route': 'reply' if blocked\
+          \ else x.get('route', 'reply'),\n            'done': 'yes' if blocked else\
+          \ x.get('done', 'no'), 'message': message,\n            'missing_features':\
+          \ missing,\n            **todos,\n            **{k:str(x.get(k) or '') for\
+          \ k in ['technical_status','blocking_state','blocked_view','resume_action','deferred_blocking_state','deferred_blocked_view',\n\
+          \                                             'expression_mode','supplier_state','semantic_state','pending_action']}}\n\
+          \    if supplier_block:\n        output['blocking_state'] = output['blocking_state']\
+          \ or supplier\n        output['pending_action'] = output['pending_action']\
+          \ or 'inspect_original'\n        output['resume_action'] = output['resume_action']\
+          \ or (\n            'qualifying_evidence_and_private_recovery' if supplier=='provider_rejected'\
+          \ else 'inspect_original_result')\n    if guide_blocked:\n        output['blocking_state']=output['blocking_state']or'needs_source'\n\
+          \        output['pending_action']=output['pending_action']or'prepare_guide'\n\
+          \    if relation_review:\n        output['blocking_state'] = output['blocking_state']\
+          \ or 'awaiting_guide_review'\n        output['resume_action'] = output['resume_action']\
+          \ or 'professional_relation_review'\n    if actual_unknown:\n        output['blocked_view']\
+          \ = output['blocked_view'] or unknown[0].split('/')[0]\n        output['blocking_state']\
+          \ = output['blocking_state'] or 'awaiting_visual_review'\n        output['pending_action']\
+          \ = output['pending_action'] or 'actual_review'\n    return output\n\n\n\
+          def loop_outcome(step_done, review_done):\n    return {'done': 'no' if step_done\
+          \ == review_done == 'no' else 'yes'}\n\n\ndef inputs(patent_type, technical_type,\
+          \ application_stage):\n    patents = {'发明': 'invention', '实用新型': 'utility_model',\
+          \ '外观设计': 'design'}\n    technologies = {'自动识别': 'auto', '机械结构': 'mechanical',\
+          \ '电气电路': 'electrical',\n        '机电结构': 'mechanical,electrical', '软件/计算机方法':\
+          \ 'computer_method', '通信': 'communication', '制造工艺': 'manufacturing_process',\n\
+          \        '化学材料': 'chemical_material', '生物医学': 'bio_medical', '半导体': 'semiconductor'}\n\
+          \    stages = {'申请前': 'draft', '已申请': 'filed'}\n    if patent_type not in\
+          \ patents or technical_type not in technologies or application_stage not\
+          \ in stages:\n        raise ValueError('请选择实际申请类型、技术类型和申请阶段')\n    return\
+          \ {'patent_type': patents[patent_type], 'technical_type': technologies[technical_type],\
+          \ 'application_stage': stages[application_stage]}\n\n\ndef main(items):\n\
+          \ return result(items)\n"
+        variables:
+        - variable: items
+          value_selector:
+          - q_review
+          - json
+        outputs:
+          workspace_id:
+            type: string
+            children: null
+          route:
+            type: string
+            children: null
+          done:
+            type: string
+            children: null
+          message:
+            type: string
+            children: null
+          technical_status:
+            type: string
+            children: null
+          blocking_state:
+            type: string
+            children: null
+          blocked_view:
+            type: string
+            children: null
+          resume_action:
+            type: string
+            children: null
+          deferred_blocking_state:
+            type: string
+            children: null
+          deferred_blocked_view:
+            type: string
+            children: null
+          expression_mode:
+            type: string
+            children: null
+          supplier_state:
+            type: string
+            children: null
+          semantic_state:
+            type: string
+            children: null
+          pending_action:
+            type: string
+            children: null
+          failed_feature_ids:
+            type: array[string]
+            children: null
+          unknown_feature_ids:
+            type: array[string]
+            children: null
+          unreviewed_view_ids:
+            type: array[string]
+            children: null
+          missing_features:
+            type: array[string]
+            children: null
+        isInLoop: true
+        loop_id: q_loop
+      parentId: q_loop
+      extent: parent
+      zIndex: 1002
+    - id: q_step_result
+      type: custom
+      position:
+        x: 1560
+        y: 90
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: code
+        title: 读取当前图完成状态
+        desc: ''
+        selected: false
+        code_language: python3
+        code: "\"\"\"Pure Dify code-node adapters; no credentials, HTTP or model dispatch.\"\
+          \"\"\nimport json\n\n\ndef result(items):\n    if not isinstance(items,\
+          \ list): raise ValueError('工具结果应为JSON数组')\n    rows = [x for x in items\
+          \ if isinstance(x, dict) and 'workspace_id' in x]\n    if len(rows) != 1:\
+          \ raise ValueError('缺少唯一工作区结果；未自动重试')\n    x = rows[0]\n    todos = {}\n\
+          \    for field in ['failed_feature_ids', 'unknown_feature_ids', 'unreviewed_view_ids']:\n\
+          \        value = x.get(field, [])\n        if not isinstance(value, list)\
+          \ or any(not isinstance(v, str) for v in value):\n            raise ValueError('待办字段应为字符串数组：'\
+          \ + field)\n        todos[field] = value\n    unknown = todos['unknown_feature_ids']\n\
+          \    if any(value.count('/') != 1 or not all(value.split('/')) for value\
+          \ in unknown):\n        raise ValueError('实际图待确认特征应使用视图/特征标识：unknown_feature_ids')\n\
+          \    independent_source = bool(x.get('deferred_blocking_state')) and x.get('route')\
+          \ == 'execute'\n    missing = x.get('missing_features', [])\n    if not\
+          \ isinstance(missing, list) or any(not isinstance(v, str) or not v for v\
+          \ in missing):\n        raise ValueError('引导待补充字段应为字符串数组：missing_features')\n\
+          \    guide_blocked = bool(missing) and not independent_source\n    relation_review\
+          \ = x.get('pending_action') == 'professional_relation_review' and not independent_source\n\
+          \    actual_unknown = bool(unknown) and not independent_source\n    supplier\
+          \ = x.get('supplier_state')\n    supplier_block = supplier in ('provider_rejected',\
+          \ 'result_unknown')\n    blocked = (bool(x.get('blocking_state')) or supplier_block\
+          \ or x.get('semantic_state') in {'FAIL','UNKNOWN'}\n               or guide_blocked\
+          \ or relation_review\n               or bool(todos['failed_feature_ids'])\n\
+          \               or actual_unknown\n               or (bool(todos['unreviewed_view_ids'])\
+          \ and not independent_source)\n               or (x.get('pending_action')\
+          \ in {'prepare_guide','private_review','actual_review'} and not independent_source))\n\
+          \    message=x.get('message', '')\n    if supplier_block:\n        reason\
+          \ = '供应商拒绝本次请求' if supplier=='provider_rejected' else '供应商请求结果未知'\n    \
+          \    if reason not in message:\n            message += '\\n'+reason+'，请核对原始记录。'\n\
+          \    if x.get('blocking_state') == 'local_preflight_rejected' and '未发送图像请求'\
+          \ not in message:\n        message += '\\n本地预算前置检查未通过，未发送图像请求。'\n    if\
+          \ actual_unknown and not all(value in message for value in unknown):\n \
+          \       message += '\\n实际图待确认特征：' + '、'.join(unknown) + '。'\n    if relation_review\
+          \ and '专业审阅' not in message:\n        message += '\\n局部连接示意需绑定原交底和本版引导图的专业审阅回执。'\n\
+          \    if guide_blocked:\n        names={'pin-hole-fit':'销孔配合','rib-insertion-contact':'入孔肋接触',\n\
+          \               'channel-contour':'通道轮廓','channel-partition-solids':'实体分隔壁',\n\
+          \               'source-fidelity':'来源形体保真','cable-side-opening':'电缆侧焊接开口'}\n\
+          \        detail='、'.join(names.get(f,f)+'（'+f+'）'if f in names else f for\
+          \ f in missing)\n        message += '\\n引导待补充，视图 '+str(x.get('blocked_view')or'待定位')+'：'+detail+'。'\n\
+          \    output = {'workspace_id': x['workspace_id'], 'route': 'reply' if blocked\
+          \ else x.get('route', 'reply'),\n            'done': 'yes' if blocked else\
+          \ x.get('done', 'no'), 'message': message,\n            'missing_features':\
+          \ missing,\n            **todos,\n            **{k:str(x.get(k) or '') for\
+          \ k in ['technical_status','blocking_state','blocked_view','resume_action','deferred_blocking_state','deferred_blocked_view',\n\
+          \                                             'expression_mode','supplier_state','semantic_state','pending_action']}}\n\
+          \    if supplier_block:\n        output['blocking_state'] = output['blocking_state']\
+          \ or supplier\n        output['pending_action'] = output['pending_action']\
+          \ or 'inspect_original'\n        output['resume_action'] = output['resume_action']\
+          \ or (\n            'qualifying_evidence_and_private_recovery' if supplier=='provider_rejected'\
+          \ else 'inspect_original_result')\n    if guide_blocked:\n        output['blocking_state']=output['blocking_state']or'needs_source'\n\
+          \        output['pending_action']=output['pending_action']or'prepare_guide'\n\
+          \    if relation_review:\n        output['blocking_state'] = output['blocking_state']\
+          \ or 'awaiting_guide_review'\n        output['resume_action'] = output['resume_action']\
+          \ or 'professional_relation_review'\n    if actual_unknown:\n        output['blocked_view']\
+          \ = output['blocked_view'] or unknown[0].split('/')[0]\n        output['blocking_state']\
+          \ = output['blocking_state'] or 'awaiting_visual_review'\n        output['pending_action']\
+          \ = output['pending_action'] or 'actual_review'\n    return output\n\n\n\
+          def loop_outcome(step_done, review_done):\n    return {'done': 'no' if step_done\
+          \ == review_done == 'no' else 'yes'}\n\n\ndef inputs(patent_type, technical_type,\
+          \ application_stage):\n    patents = {'发明': 'invention', '实用新型': 'utility_model',\
+          \ '外观设计': 'design'}\n    technologies = {'自动识别': 'auto', '机械结构': 'mechanical',\
+          \ '电气电路': 'electrical',\n        '机电结构': 'mechanical,electrical', '软件/计算机方法':\
+          \ 'computer_method', '通信': 'communication', '制造工艺': 'manufacturing_process',\n\
+          \        '化学材料': 'chemical_material', '生物医学': 'bio_medical', '半导体': 'semiconductor'}\n\
+          \    stages = {'申请前': 'draft', '已申请': 'filed'}\n    if patent_type not in\
+          \ patents or technical_type not in technologies or application_stage not\
+          \ in stages:\n        raise ValueError('请选择实际申请类型、技术类型和申请阶段')\n    return\
+          \ {'patent_type': patents[patent_type], 'technical_type': technologies[technical_type],\
+          \ 'application_stage': stages[application_stage]}\n\n\ndef main(items):\n\
+          \ return result(items)\n"
+        variables:
+        - variable: items
+          value_selector:
+          - q_step
+          - json
+        outputs:
+          workspace_id:
+            type: string
+            children: null
+          route:
+            type: string
+            children: null
+          done:
+            type: string
+            children: null
+          message:
+            type: string
+            children: null
+          technical_status:
+            type: string
+            children: null
+          blocking_state:
+            type: string
+            children: null
+          blocked_view:
+            type: string
+            children: null
+          resume_action:
+            type: string
+            children: null
+          deferred_blocking_state:
+            type: string
+            children: null
+          deferred_blocked_view:
+            type: string
+            children: null
+          expression_mode:
+            type: string
+            children: null
+          supplier_state:
+            type: string
+            children: null
+          semantic_state:
+            type: string
+            children: null
+          pending_action:
+            type: string
+            children: null
+          failed_feature_ids:
+            type: array[string]
+            children: null
+          unknown_feature_ids:
+            type: array[string]
+            children: null
+          unreviewed_view_ids:
+            type: array[string]
+            children: null
+          missing_features:
+            type: array[string]
+            children: null
+        isInLoop: true
+        loop_id: q_loop
+      parentId: q_loop
+      extent: parent
+      zIndex: 1002
+    - id: q_loop_outcome
+      type: custom
+      position:
+        x: 1820
+        y: 90
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: code
+        title: 合并执行和审阅停止信号
+        desc: ''
+        selected: false
+        code_language: python3
+        code: "\"\"\"Pure Dify code-node adapters; no credentials, HTTP or model dispatch.\"\
+          \"\"\nimport json\n\n\ndef result(items):\n    if not isinstance(items,\
+          \ list): raise ValueError('工具结果应为JSON数组')\n    rows = [x for x in items\
+          \ if isinstance(x, dict) and 'workspace_id' in x]\n    if len(rows) != 1:\
+          \ raise ValueError('缺少唯一工作区结果；未自动重试')\n    x = rows[0]\n    todos = {}\n\
+          \    for field in ['failed_feature_ids', 'unknown_feature_ids', 'unreviewed_view_ids']:\n\
+          \        value = x.get(field, [])\n        if not isinstance(value, list)\
+          \ or any(not isinstance(v, str) for v in value):\n            raise ValueError('待办字段应为字符串数组：'\
+          \ + field)\n        todos[field] = value\n    unknown = todos['unknown_feature_ids']\n\
+          \    if any(value.count('/') != 1 or not all(value.split('/')) for value\
+          \ in unknown):\n        raise ValueError('实际图待确认特征应使用视图/特征标识：unknown_feature_ids')\n\
+          \    independent_source = bool(x.get('deferred_blocking_state')) and x.get('route')\
+          \ == 'execute'\n    missing = x.get('missing_features', [])\n    if not\
+          \ isinstance(missing, list) or any(not isinstance(v, str) or not v for v\
+          \ in missing):\n        raise ValueError('引导待补充字段应为字符串数组：missing_features')\n\
+          \    guide_blocked = bool(missing) and not independent_source\n    relation_review\
+          \ = x.get('pending_action') == 'professional_relation_review' and not independent_source\n\
+          \    actual_unknown = bool(unknown) and not independent_source\n    supplier\
+          \ = x.get('supplier_state')\n    supplier_block = supplier in ('provider_rejected',\
+          \ 'result_unknown')\n    blocked = (bool(x.get('blocking_state')) or supplier_block\
+          \ or x.get('semantic_state') in {'FAIL','UNKNOWN'}\n               or guide_blocked\
+          \ or relation_review\n               or bool(todos['failed_feature_ids'])\n\
+          \               or actual_unknown\n               or (bool(todos['unreviewed_view_ids'])\
+          \ and not independent_source)\n               or (x.get('pending_action')\
+          \ in {'prepare_guide','private_review','actual_review'} and not independent_source))\n\
+          \    message=x.get('message', '')\n    if supplier_block:\n        reason\
+          \ = '供应商拒绝本次请求' if supplier=='provider_rejected' else '供应商请求结果未知'\n    \
+          \    if reason not in message:\n            message += '\\n'+reason+'，请核对原始记录。'\n\
+          \    if x.get('blocking_state') == 'local_preflight_rejected' and '未发送图像请求'\
+          \ not in message:\n        message += '\\n本地预算前置检查未通过，未发送图像请求。'\n    if\
+          \ actual_unknown and not all(value in message for value in unknown):\n \
+          \       message += '\\n实际图待确认特征：' + '、'.join(unknown) + '。'\n    if relation_review\
+          \ and '专业审阅' not in message:\n        message += '\\n局部连接示意需绑定原交底和本版引导图的专业审阅回执。'\n\
+          \    if guide_blocked:\n        names={'pin-hole-fit':'销孔配合','rib-insertion-contact':'入孔肋接触',\n\
+          \               'channel-contour':'通道轮廓','channel-partition-solids':'实体分隔壁',\n\
+          \               'source-fidelity':'来源形体保真','cable-side-opening':'电缆侧焊接开口'}\n\
+          \        detail='、'.join(names.get(f,f)+'（'+f+'）'if f in names else f for\
+          \ f in missing)\n        message += '\\n引导待补充，视图 '+str(x.get('blocked_view')or'待定位')+'：'+detail+'。'\n\
+          \    output = {'workspace_id': x['workspace_id'], 'route': 'reply' if blocked\
+          \ else x.get('route', 'reply'),\n            'done': 'yes' if blocked else\
+          \ x.get('done', 'no'), 'message': message,\n            'missing_features':\
+          \ missing,\n            **todos,\n            **{k:str(x.get(k) or '') for\
+          \ k in ['technical_status','blocking_state','blocked_view','resume_action','deferred_blocking_state','deferred_blocked_view',\n\
+          \                                             'expression_mode','supplier_state','semantic_state','pending_action']}}\n\
+          \    if supplier_block:\n        output['blocking_state'] = output['blocking_state']\
+          \ or supplier\n        output['pending_action'] = output['pending_action']\
+          \ or 'inspect_original'\n        output['resume_action'] = output['resume_action']\
+          \ or (\n            'qualifying_evidence_and_private_recovery' if supplier=='provider_rejected'\
+          \ else 'inspect_original_result')\n    if guide_blocked:\n        output['blocking_state']=output['blocking_state']or'needs_source'\n\
+          \        output['pending_action']=output['pending_action']or'prepare_guide'\n\
+          \    if relation_review:\n        output['blocking_state'] = output['blocking_state']\
+          \ or 'awaiting_guide_review'\n        output['resume_action'] = output['resume_action']\
+          \ or 'professional_relation_review'\n    if actual_unknown:\n        output['blocked_view']\
+          \ = output['blocked_view'] or unknown[0].split('/')[0]\n        output['blocking_state']\
+          \ = output['blocking_state'] or 'awaiting_visual_review'\n        output['pending_action']\
+          \ = output['pending_action'] or 'actual_review'\n    return output\n\n\n\
+          def loop_outcome(step_done, review_done):\n    return {'done': 'no' if step_done\
+          \ == review_done == 'no' else 'yes'}\n\n\ndef inputs(patent_type, technical_type,\
+          \ application_stage):\n    patents = {'发明': 'invention', '实用新型': 'utility_model',\
+          \ '外观设计': 'design'}\n    technologies = {'自动识别': 'auto', '机械结构': 'mechanical',\
+          \ '电气电路': 'electrical',\n        '机电结构': 'mechanical,electrical', '软件/计算机方法':\
+          \ 'computer_method', '通信': 'communication', '制造工艺': 'manufacturing_process',\n\
+          \        '化学材料': 'chemical_material', '生物医学': 'bio_medical', '半导体': 'semiconductor'}\n\
+          \    stages = {'申请前': 'draft', '已申请': 'filed'}\n    if patent_type not in\
+          \ patents or technical_type not in technologies or application_stage not\
+          \ in stages:\n        raise ValueError('请选择实际申请类型、技术类型和申请阶段')\n    return\
+          \ {'patent_type': patents[patent_type], 'technical_type': technologies[technical_type],\
+          \ 'application_stage': stages[application_stage]}\n\n\ndef main(step_done,review_done):\n\
+          \ return loop_outcome(step_done, review_done)\n"
+        variables:
+        - variable: step_done
+          value_selector:
+          - q_step_result
+          - done
+        - variable: review_done
+          value_selector:
+          - q_review_result
+          - done
+        outputs:
+          done:
+            type: string
+            children: null
+        isInLoop: true
+        loop_id: q_loop
+      parentId: q_loop
+      extent: parent
+      zIndex: 1002
+    - id: q_save_done
+      type: custom
+      position:
+        x: 2080
+        y: 90
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: assigner
+        title: 推进显式循环状态
+        desc: ''
+        selected: false
+        version: '2'
+        isInLoop: true
+        loop_id: q_loop
+        items:
+        - variable_selector:
+          - q_loop
+          - done
+          input_type: variable
+          operation: over-write
+          value:
+          - q_loop_outcome
+          - done
+      parentId: q_loop
+      extent: parent
+      zIndex: 1002
+    - id: q_package
+      type: custom
+      position:
+        x: 1550
+        y: 1100
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: tool
+        title: 核查成套图并生成PDF/ZIP
+        desc: ''
+        selected: false
+        provider_type: builtin
+        provider_id: tina-patentpro/oasisintwrite_patent_drawing/oasisintwrite_patent_drawing
+        provider_name: tina-patentpro/oasisintwrite_patent_drawing/oasisintwrite_patent_drawing
+        tool_name: patent_drawing_workspace
+        tool_label: 专利附图工作区
+        tool_configurations: {}
+        tool_parameters:
+          context_id:
+            type: variable
+            value:
+            - sys
+            - conversation_id
+          workspace_id:
+            type: variable
+            value:
+            - q_result
+            - workspace_id
+          action:
+            type: mixed
+            value: package
+        tool_node_version: '2'
+        plugin_unique_identifier: tina-patentpro/oasisintwrite_patent_drawing:0.3.9@79455235db272dc99ef3e9201178f0efa355b9e3bf8caef8adce05c813df7cf4
+        credential_id: null
+        is_team_authorization: true
+        retry_config:
+          retry_enabled: false
+          max_retries: 0
+          retry_interval: 1000
+    - id: q_final_result
+      type: custom
+      position:
+        x: 0
+        y: 1650
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: code
+        title: 读取核查与交付状态
+        desc: ''
+        selected: false
+        code_language: python3
+        code: "\"\"\"Pure Dify code-node adapters; no credentials, HTTP or model dispatch.\"\
+          \"\"\nimport json\n\n\ndef result(items):\n    if not isinstance(items,\
+          \ list): raise ValueError('工具结果应为JSON数组')\n    rows = [x for x in items\
+          \ if isinstance(x, dict) and 'workspace_id' in x]\n    if len(rows) != 1:\
+          \ raise ValueError('缺少唯一工作区结果；未自动重试')\n    x = rows[0]\n    todos = {}\n\
+          \    for field in ['failed_feature_ids', 'unknown_feature_ids', 'unreviewed_view_ids']:\n\
+          \        value = x.get(field, [])\n        if not isinstance(value, list)\
+          \ or any(not isinstance(v, str) for v in value):\n            raise ValueError('待办字段应为字符串数组：'\
+          \ + field)\n        todos[field] = value\n    unknown = todos['unknown_feature_ids']\n\
+          \    if any(value.count('/') != 1 or not all(value.split('/')) for value\
+          \ in unknown):\n        raise ValueError('实际图待确认特征应使用视图/特征标识：unknown_feature_ids')\n\
+          \    independent_source = bool(x.get('deferred_blocking_state')) and x.get('route')\
+          \ == 'execute'\n    missing = x.get('missing_features', [])\n    if not\
+          \ isinstance(missing, list) or any(not isinstance(v, str) or not v for v\
+          \ in missing):\n        raise ValueError('引导待补充字段应为字符串数组：missing_features')\n\
+          \    guide_blocked = bool(missing) and not independent_source\n    relation_review\
+          \ = x.get('pending_action') == 'professional_relation_review' and not independent_source\n\
+          \    actual_unknown = bool(unknown) and not independent_source\n    supplier\
+          \ = x.get('supplier_state')\n    supplier_block = supplier in ('provider_rejected',\
+          \ 'result_unknown')\n    blocked = (bool(x.get('blocking_state')) or supplier_block\
+          \ or x.get('semantic_state') in {'FAIL','UNKNOWN'}\n               or guide_blocked\
+          \ or relation_review\n               or bool(todos['failed_feature_ids'])\n\
+          \               or actual_unknown\n               or (bool(todos['unreviewed_view_ids'])\
+          \ and not independent_source)\n               or (x.get('pending_action')\
+          \ in {'prepare_guide','private_review','actual_review'} and not independent_source))\n\
+          \    message=x.get('message', '')\n    if supplier_block:\n        reason\
+          \ = '供应商拒绝本次请求' if supplier=='provider_rejected' else '供应商请求结果未知'\n    \
+          \    if reason not in message:\n            message += '\\n'+reason+'，请核对原始记录。'\n\
+          \    if x.get('blocking_state') == 'local_preflight_rejected' and '未发送图像请求'\
+          \ not in message:\n        message += '\\n本地预算前置检查未通过，未发送图像请求。'\n    if\
+          \ actual_unknown and not all(value in message for value in unknown):\n \
+          \       message += '\\n实际图待确认特征：' + '、'.join(unknown) + '。'\n    if relation_review\
+          \ and '专业审阅' not in message:\n        message += '\\n局部连接示意需绑定原交底和本版引导图的专业审阅回执。'\n\
+          \    if guide_blocked:\n        names={'pin-hole-fit':'销孔配合','rib-insertion-contact':'入孔肋接触',\n\
+          \               'channel-contour':'通道轮廓','channel-partition-solids':'实体分隔壁',\n\
+          \               'source-fidelity':'来源形体保真','cable-side-opening':'电缆侧焊接开口'}\n\
+          \        detail='、'.join(names.get(f,f)+'（'+f+'）'if f in names else f for\
+          \ f in missing)\n        message += '\\n引导待补充，视图 '+str(x.get('blocked_view')or'待定位')+'：'+detail+'。'\n\
+          \    output = {'workspace_id': x['workspace_id'], 'route': 'reply' if blocked\
+          \ else x.get('route', 'reply'),\n            'done': 'yes' if blocked else\
+          \ x.get('done', 'no'), 'message': message,\n            'missing_features':\
+          \ missing,\n            **todos,\n            **{k:str(x.get(k) or '') for\
+          \ k in ['technical_status','blocking_state','blocked_view','resume_action','deferred_blocking_state','deferred_blocked_view',\n\
+          \                                             'expression_mode','supplier_state','semantic_state','pending_action']}}\n\
+          \    if supplier_block:\n        output['blocking_state'] = output['blocking_state']\
+          \ or supplier\n        output['pending_action'] = output['pending_action']\
+          \ or 'inspect_original'\n        output['resume_action'] = output['resume_action']\
+          \ or (\n            'qualifying_evidence_and_private_recovery' if supplier=='provider_rejected'\
+          \ else 'inspect_original_result')\n    if guide_blocked:\n        output['blocking_state']=output['blocking_state']or'needs_source'\n\
+          \        output['pending_action']=output['pending_action']or'prepare_guide'\n\
+          \    if relation_review:\n        output['blocking_state'] = output['blocking_state']\
+          \ or 'awaiting_guide_review'\n        output['resume_action'] = output['resume_action']\
+          \ or 'professional_relation_review'\n    if actual_unknown:\n        output['blocked_view']\
+          \ = output['blocked_view'] or unknown[0].split('/')[0]\n        output['blocking_state']\
+          \ = output['blocking_state'] or 'awaiting_visual_review'\n        output['pending_action']\
+          \ = output['pending_action'] or 'actual_review'\n    return output\n\n\n\
+          def loop_outcome(step_done, review_done):\n    return {'done': 'no' if step_done\
+          \ == review_done == 'no' else 'yes'}\n\n\ndef inputs(patent_type, technical_type,\
+          \ application_stage):\n    patents = {'发明': 'invention', '实用新型': 'utility_model',\
+          \ '外观设计': 'design'}\n    technologies = {'自动识别': 'auto', '机械结构': 'mechanical',\
+          \ '电气电路': 'electrical',\n        '机电结构': 'mechanical,electrical', '软件/计算机方法':\
+          \ 'computer_method', '通信': 'communication', '制造工艺': 'manufacturing_process',\n\
+          \        '化学材料': 'chemical_material', '生物医学': 'bio_medical', '半导体': 'semiconductor'}\n\
+          \    stages = {'申请前': 'draft', '已申请': 'filed'}\n    if patent_type not in\
+          \ patents or technical_type not in technologies or application_stage not\
+          \ in stages:\n        raise ValueError('请选择实际申请类型、技术类型和申请阶段')\n    return\
+          \ {'patent_type': patents[patent_type], 'technical_type': technologies[technical_type],\
+          \ 'application_stage': stages[application_stage]}\n\n\ndef main(items):\n\
+          \ return result(items)\n"
+        variables:
+        - variable: items
+          value_selector:
+          - q_package
+          - json
+        outputs:
+          workspace_id:
+            type: string
+            children: null
+          route:
+            type: string
+            children: null
+          done:
+            type: string
+            children: null
+          message:
+            type: string
+            children: null
+          technical_status:
+            type: string
+            children: null
+          blocking_state:
+            type: string
+            children: null
+          blocked_view:
+            type: string
+            children: null
+          resume_action:
+            type: string
+            children: null
+          deferred_blocking_state:
+            type: string
+            children: null
+          deferred_blocked_view:
+            type: string
+            children: null
+          expression_mode:
+            type: string
+            children: null
+          supplier_state:
+            type: string
+            children: null
+          semantic_state:
+            type: string
+            children: null
+          pending_action:
+            type: string
+            children: null
+          failed_feature_ids:
+            type: array[string]
+            children: null
+          unknown_feature_ids:
+            type: array[string]
+            children: null
+          unreviewed_view_ids:
+            type: array[string]
+            children: null
+          missing_features:
+            type: array[string]
+            children: null
+    - id: q_answer
+      type: custom
+      position:
+        x: 310
+        y: 1650
+      width: 244
+      height: 100
+      sourcePosition: right
+      targetPosition: left
+      data:
+        type: answer
+        title: 成套附图草稿与核查
+        desc: ''
+        selected: false
+        answer: '{{#q_package.files#}}
+
+
+          {{#q_final_result.message#}}'
+    edges:
+    - id: q_start-source-q_types
+      source: q_start
+      target: q_types
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: start
+        targetType: code
+        isInLoop: false
+        loop_id: null
+    - id: q_types-source-q_receive
+      source: q_types
+      target: q_receive
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: code
+        targetType: tool
+        isInLoop: false
+        loop_id: null
+    - id: q_receive-source-q_result
+      source: q_receive
+      target: q_result
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: tool
+        targetType: code
+        isInLoop: false
+        loop_id: null
+    - id: q_result-source-q_remember
+      source: q_result
+      target: q_remember
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: code
+        targetType: assigner
+        isInLoop: false
+        loop_id: null
+    - id: q_remember-source-q_preflight
+      source: q_remember
+      target: q_preflight
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: assigner
+        targetType: tool
+        isInLoop: false
+        loop_id: null
+    - id: q_preflight-source-q_preflight_result
+      source: q_preflight
+      target: q_preflight_result
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: tool
+        targetType: code
+        isInLoop: false
+        loop_id: null
+    - id: q_preflight_result-source-q_switch
+      source: q_preflight_result
+      target: q_switch
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: code
+        targetType: if-else
+        isInLoop: false
+        loop_id: null
+    - id: q_loop-source-q_package
+      source: q_loop
+      target: q_package
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: loop
+        targetType: tool
+        isInLoop: false
+        loop_id: null
+    - id: q_package-source-q_final_result
+      source: q_package
+      target: q_final_result
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: tool
+        targetType: code
+        isInLoop: false
+        loop_id: null
+    - id: q_final_result-source-q_answer
+      source: q_final_result
+      target: q_answer
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: code
+        targetType: answer
+        isInLoop: false
+        loop_id: null
+    - id: q_switch-execute-q_loop
+      source: q_switch
+      target: q_loop
+      sourceHandle: execute
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: loop
+        isInLoop: false
+        loop_id: null
+    - id: q_switch-false-q_preview
+      source: q_switch
+      target: q_preview
+      sourceHandle: 'false'
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: answer
+        isInLoop: false
+        loop_id: null
+    - id: q_loop_start-source-q_step
+      source: q_loop_start
+      target: q_step
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: loop-start
+        targetType: tool
+        isInLoop: true
+        loop_id: q_loop
+    - id: q_step-source-q_step_result
+      source: q_step
+      target: q_step_result
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: tool
+        targetType: code
+        isInLoop: true
+        loop_id: q_loop
+    - id: q_step_result-source-q_review
+      source: q_step_result
+      target: q_review
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: code
+        targetType: tool
+        isInLoop: true
+        loop_id: q_loop
+    - id: q_review-source-q_review_result
+      source: q_review
+      target: q_review_result
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: tool
+        targetType: code
+        isInLoop: true
+        loop_id: q_loop
+    - id: q_review_result-source-q_loop_outcome
+      source: q_review_result
+      target: q_loop_outcome
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: code
+        targetType: code
+        isInLoop: true
+        loop_id: q_loop
+    - id: q_loop_outcome-source-q_save_done
+      source: q_loop_outcome
+      target: q_save_done
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: code
+        targetType: assigner
+        isInLoop: true
+        loop_id: q_loop
+    viewport:
+      x: 0
+      y: 0
+      zoom: 0.5
+  features:
+    opening_statement: 上传交底PDF/图片，或填写正文。先发送“预览”核对来源，再发送“规划”“确认图单”“执行单图”。已有原图时修改补充，无原图时按技术类型新建。空间图保存后先审阅再继续局部图；关联改号需实际底图锚点齐备，整套完成才提升版本。可发送“改名”“修改：标号10改为110”“查看已完成”“导出已完成”“导出”。已登记受限工程示意时，可发送“导出工程示意”。拒绝或未知结果保留，不自动重试。
+    suggested_questions:
+    - 预览
+    - 规划
+    - 导出
+    file_upload:
+      enabled: true
+      allowed_file_extensions:
+      - .PDF
+      - .PNG
+      - .JPG
+      - .JPEG
+      - .TXT
+      - .MD
+      allowed_file_types:
+      - image
+      - document
+      allowed_file_upload_methods:
+      - local_file
+      number_limits: 6
+      image:
+        enabled: true
+        number_limits: 6
+        transfer_methods:
+        - local_file
+    text_to_speech:
+      enabled: false
+      voice: ''
+      language: ''
+    speech_to_text:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    retriever_resource:
+      enabled: false
+    suggested_questions_after_answer:
+      enabled: false
+  environment_variables: []
+  conversation_variables:
+  - id: 09a947c7-bf54-5e8d-90c7-52b7e8eec59b
+    name: drawing_workspace
+    selector:
+    - conversation
+    - drawing_workspace
+    value_type: string
+    value: ''
+    description: 本会话持久工作区引用；原件/历史保留，重置仅清引用

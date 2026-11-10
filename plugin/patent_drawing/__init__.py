@@ -1,0 +1,1 @@
+"""Shared patent drawing implementation."""

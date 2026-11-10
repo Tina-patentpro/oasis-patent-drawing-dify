@@ -1,0 +1,134 @@
+{
+  "version": "CN-drawings-20261107-r1",
+  "reviewed_at": "2026-11-07T14:03:31.966630+08:00",
+  "scope": "CN invention/utility-model drawing assistance. Legal/guide/best-practice provenance separated; not professional or filing acceptance.",
+  "official_sources": [
+    {
+      "file": "guidelines-2023.pdf",
+      "url": "https://www.cnipa.gov.cn/module/download/downfile.jsp?classid=0&filename=5753f257e6a04b6f8e305eb6d34ba452.pdf&showname=%E4%B8%93%E5%88%A9%E5%AE%A1%E6%9F%A5%E6%8C%87%E5%8D%97.pdf",
+      "sha256": "cf8cdf9af698712add00bb769963318910776fe45e449e27704105dd484e8981",
+      "bytes": 6777328
+    },
+    {
+      "file": "amendment-84.html",
+      "url": "https://www.cnipa.gov.cn/art/2025/11/14/art_99_202568.html",
+      "sha256": "8b677557e955d47723237912b29f10abcdc907e0d27583497cd81035ac0972df",
+      "bytes": 15243
+    },
+    {
+      "file": "implementing-rules-2023.html",
+      "url": "https://www.cnipa.gov.cn/art/2023/12/21/art_3317_189352.html",
+      "sha256": "0c2b5fc452088b15644a999d7400d76b10997685b12f65c72ffcfa5087f27c81",
+      "bytes": 98143
+    },
+    {
+      "file": "patent-law-2020.html",
+      "url": "https://www.cnipa.gov.cn/art/2020/11/23/art_97_155167.html",
+      "sha256": "c0f9103192c1d5b800d105e253a510faf412785f5e0f90f502180eb524c3b064",
+      "bytes": 12096
+    }
+  ],
+  "applicable_guide": "2023 edition + Order84 effective2026-01-01; selected drawing sections unchanged by Order84. Order85 is priority examination and does not replace these drawing clauses.",
+  "rules": [
+    {
+      "id": "CN-UTILITY-STRUCTURE",
+      "category": "legal",
+      "locator": "实施细则20第5款",
+      "summary": "实用新型需要表达产品形状、构造或结合的附图",
+      "code_mapping": "workspace.validate/check_policy"
+    },
+    {
+      "id": "CN-MARK-SPEC",
+      "category": "legal",
+      "locator": "实施细则21",
+      "summary": "说明书与图中标记双向对应，同一部分标记一致",
+      "code_mapping": "quality.check_set"
+    },
+    {
+      "id": "CN-NECESSARY-WORDS",
+      "category": "legal",
+      "locator": "实施细则21",
+      "summary": "仅保留必要词语；流程/框图中的必要文字不能一概删除",
+      "code_mapping": "quality.check_set"
+    },
+    {
+      "id": "CN-MARK-NUMERIC",
+      "category": "examination_guideline",
+      "locator": "第一部分第一章4.3",
+      "summary": "图号与结构标记以阿拉伯数字组织；图号置于图下",
+      "code_mapping": "delivery_v2/cn_policy"
+    },
+    {
+      "id": "CN-REDUCTION-CLARITY",
+      "category": "examination_guideline",
+      "locator": "第一部分第一章4.3",
+      "summary": "均匀清晰线条、缩小至2/3仍可辨认，剖面线不遮主线/标记",
+      "code_mapping": "quality + actual PDF visual review"
+    },
+    {
+      "id": "CN-PHOTO",
+      "category": "examination_guideline",
+      "locator": "第一部分第一章4.3；第二章7.3",
+      "summary": "发明照片原则及特殊技术场景与实用新型禁照片分开",
+      "code_mapping": "cn_policy"
+    },
+    {
+      "id": "CN-COLOR-NECESSITY",
+      "category": "examination_guideline",
+      "locator": "第一部分第一章4.3；第二章7.3",
+      "summary": "一般黑色，确有必要的彩色另核，不设置绝对禁色",
+      "code_mapping": "cn_policy"
+    },
+    {
+      "id": "CN-A4-MARGINS",
+      "category": "examination_guideline",
+      "locator": "第五部分第一章4.2、4.3，PDF第489页",
+      "summary": "A4，顶/左25mm，右/底15mm；独立图号/页码",
+      "code_mapping": "delivery_v2"
+    },
+    {
+      "id": "CN-NO-ADDED-MATTER",
+      "category": "legal",
+      "locator": "专利法33",
+      "summary": "已申请修改新增内容必须有原始申请支持",
+      "code_mapping": "cn_policy"
+    },
+    {
+      "id": "CN-DISCLOSURE",
+      "category": "legal",
+      "locator": "专利法26第3款",
+      "summary": "清楚完整披露，图文核查不由文件成功替代",
+      "code_mapping": "quality"
+    },
+    {
+      "id": "CN-DESIGN-ROUTE",
+      "category": "legal",
+      "locator": "实施细则30、31",
+      "summary": "外观设计/GUI不沿发明结构制图规则认证",
+      "code_mapping": "cn_policy"
+    },
+    {
+      "id": "BP-NO-FABRICATED-DATA",
+      "category": "best_practice",
+      "locator": "用户来源/真实性要求",
+      "summary": "图谱、性能曲线和实验图必须有实际数据，不由模型补造",
+      "code_mapping": "cn_policy"
+    },
+    {
+      "id": "BP-VIEW-PURPOSE",
+      "category": "best_practice",
+      "locator": "4份公开案例图组观察；本轮用户要求",
+      "summary": "按技术要点选视图；同一组件、父子图/剖切/状态可回溯，不设固定最少图数",
+      "code_mapping": "source_contract/scene"
+    },
+    {
+      "id": "BP-ANNOTATION-PLANE",
+      "category": "engineering_quality",
+      "locator": "本轮完善计划P3",
+      "summary": "改号独立标注层，底图不变、掩膜并集外像素相同；内嵌编号先核迁移",
+      "code_mapping": "annotations/workspace"
+    }
+  ],
+  "case_observation_source": "工程案例观察，来源材料在本地留档",
+  "evaluation_only_consumed": false
+}

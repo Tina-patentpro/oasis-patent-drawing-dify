@@ -1,0 +1,81 @@
+identity:
+  name: patent_drawing_set_validate
+  author: tina-patentpro
+  label:
+    en_US: 校验附图组计划
+    zh_Hans: 校验附图组计划
+description:
+  human:
+    en_US: 校验计划和共享标号、依赖及修改影响；不调用模型，不判定专业正确。
+    zh_Hans: 校验计划和共享标号、依赖及修改影响；不调用模型，不判定专业正确。
+  llm: 校验计划和共享标号、依赖及修改影响；不调用模型，不判定专业正确。
+parameters:
+- name: plan_json
+  type: string
+  required: true
+  form: llm
+  label:
+    en_US: 图组计划
+    zh_Hans: 图组计划
+  human_description:
+    en_US: drawing-set-1图组合同，由对话流规划或导入；技术内容仍需核对。
+    zh_Hans: drawing-set-1图组合同，由对话流规划或导入；技术内容仍需核对。
+  llm_description: drawing-set-1图组合同，由对话流规划或导入；技术内容仍需核对。
+- name: previous_plan_json
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: 上一版计划
+    zh_Hans: 上一版计划
+  human_description:
+    en_US: 关联修改时提供上一版drawing-set-1计划。
+    zh_Hans: 关联修改时提供上一版drawing-set-1计划。
+  llm_description: 关联修改时提供上一版drawing-set-1计划。
+- name: edit_instruction
+  type: string
+  required: false
+  label:
+    en_US: edit_instruction
+    zh_Hans: 本次修改说明（用于执行前提示长度校验）
+  human_description:
+    en_US: edit_instruction
+    zh_Hans: 本次修改说明（用于执行前提示长度校验）
+  llm_description: 本次修改说明（用于执行前提示长度校验）
+  form: llm
+- name: reference_image
+  type: file
+  required: false
+  label:
+    en_US: reference_image
+    zh_Hans: 补传原PNG，可选
+  human_description:
+    en_US: reference_image
+    zh_Hans: 补传原PNG，可选
+  llm_description: 补传原PNG，可选
+  form: llm
+- name: reference_figure_id
+  type: string
+  required: false
+  label:
+    en_US: reference_figure_id
+    zh_Hans: 补传原图图号
+  human_description:
+    en_US: reference_figure_id
+    zh_Hans: 补传原图图号
+  llm_description: 补传原图图号
+  form: llm
+- name: expected_reference_sha256
+  type: string
+  required: false
+  label:
+    en_US: expected_reference_sha256
+    zh_Hans: 原记录PNG的SHA256
+  human_description:
+    en_US: expected_reference_sha256
+    zh_Hans: 原记录PNG的SHA256
+  llm_description: 原记录PNG的SHA256
+  form: llm
+extra:
+  python:
+    source: tools/validate_set.py

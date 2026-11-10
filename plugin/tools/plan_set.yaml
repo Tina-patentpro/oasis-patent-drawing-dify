@@ -1,0 +1,37 @@
+identity:
+  name: patent_drawing_set_plan
+  author: tina-patentpro
+  label:
+    en_US: Drawing plan transport
+    zh_Hans: 官方API图组规划
+description:
+  human:
+    en_US: Execute Chatflow planning prompt through official Responses API once
+    zh_Hans: 执行对话流的规划提示，直连官方Responses API，不自动重试
+  llm: Execute provided planning prompt
+parameters:
+- name: system_prompt
+  type: string
+  required: true
+  label:
+    en_US: system_prompt
+    zh_Hans: 对话流规划规则
+  human_description:
+    en_US: system_prompt
+    zh_Hans: 对话流规划规则
+  llm_description: 对话流规划规则
+  form: llm
+- name: user_prompt
+  type: string
+  required: true
+  label:
+    en_US: user_prompt
+    zh_Hans: 材料、上一版及修改要求
+  human_description:
+    en_US: user_prompt
+    zh_Hans: 材料、上一版及修改要求
+  llm_description: 材料、上一版及修改要求
+  form: llm
+extra:
+  python:
+    source: tools/plan_set.py

@@ -1,0 +1,92 @@
+identity:
+  name: patent_drawing_set_render
+  author: tina-patentpro
+  label:
+    en_US: 绘制图组指定图
+    zh_Hans: 绘制图组指定图
+description:
+  human:
+    en_US: 按图组合同生成或修改一张图。image固定OpenAI官方gpt-image-2.6-flare；vector按显式图形和连接生成SVG/PNG。
+    zh_Hans: 按图组合同生成或修改一张图。image固定OpenAI官方gpt-image-2.6-flare；vector按显式图形和连接生成SVG/PNG。
+  llm: 按图组合同生成或修改一张图。image固定OpenAI官方gpt-image-2.6-flare；vector按显式图形和连接生成SVG/PNG。
+parameters:
+- name: plan_json
+  type: string
+  required: true
+  form: llm
+  label:
+    en_US: 图组计划
+    zh_Hans: 图组计划
+  human_description:
+    en_US: drawing-set-1图组合同，由对话流规划或导入；技术内容仍需核对。
+    zh_Hans: drawing-set-1图组合同，由对话流规划或导入；技术内容仍需核对。
+  llm_description: drawing-set-1图组合同，由对话流规划或导入；技术内容仍需核对。
+- name: figure_id
+  type: string
+  required: true
+  form: llm
+  label:
+    en_US: 图件ID
+    zh_Hans: 图件ID
+  human_description:
+    en_US: 当前计划中的图件ID。
+    zh_Hans: 当前计划中的图件ID。
+  llm_description: 当前计划中的图件ID。
+- name: operation
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: 操作
+    zh_Hans: 操作
+  human_description:
+    en_US: generate或edit，默认generate。
+    zh_Hans: generate或edit，默认generate。
+  llm_description: generate或edit，默认generate。
+- name: reference_image
+  type: file
+  required: false
+  form: llm
+  label:
+    en_US: 原图
+    zh_Hans: 原图
+  human_description:
+    en_US: 修改或依赖参考图，PNG/JPEG/WebP；身份及SHA必须匹配。
+    zh_Hans: 修改或依赖参考图，PNG/JPEG/WebP；身份及SHA必须匹配。
+  llm_description: 修改或依赖参考图，PNG/JPEG/WebP；身份及SHA必须匹配。
+- name: reference_figure_id
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: 原图ID
+    zh_Hans: 原图ID
+  human_description:
+    en_US: 修改时等于当前图ID，派生时必须是声明的依赖。
+    zh_Hans: 修改时等于当前图ID，派生时必须是声明的依赖。
+  llm_description: 修改时等于当前图ID，派生时必须是声明的依赖。
+- name: expected_reference_sha256
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: 原图SHA256
+    zh_Hans: 原图SHA256
+  human_description:
+    en_US: 原图原始字节的SHA256，禁止串图。
+    zh_Hans: 原图原始字节的SHA256，禁止串图。
+  llm_description: 原图原始字节的SHA256，禁止串图。
+- name: edit_instruction
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: 修改说明
+    zh_Hans: 修改说明
+  human_description:
+    en_US: 明确改变与保留内容；修改时必填。
+    zh_Hans: 明确改变与保留内容；修改时必填。
+  llm_description: 明确改变与保留内容；修改时必填。
+extra:
+  python:
+    source: tools/render_set_figure.py
