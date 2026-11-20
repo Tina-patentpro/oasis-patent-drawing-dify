@@ -1,7 +1,7 @@
 """Operator-reviewed isolated number overlay; original raster base never rewritten."""
 import base64,hashlib,io,re,copy
-from PIL import Image,ImageDraw
-from .annotations import png,regular_font
+from PIL import Image,ImageChops,ImageDraw
+from .annotations import outside_regions_unchanged,png,regular_font
 
 def apply(base,receipt):
  if hashlib.sha256(base).hexdigest()!=receipt.get('base_sha256'):raise ValueError('migration source SHA mismatch')
@@ -30,3 +30,30 @@ def apply(base,receipt):
  draw.rectangle([l,t,r-1,b-1],fill='white');draw.text(at,receipt['new_label'],font=face,fill='black',anchor='lt');im.paste(layer,mask=layer.getchannel('A'))
  mask=Image.new('L',im.size,0);ImageDraw.Draw(mask).rectangle([l,t,r-1,b-1],fill=255)
  return {'png':png(im),'regions':[{'text_box':list(box),'mask':base64.b64encode(png(mask)).decode()}],'receipt':copy.deepcopy(receipt)}
+
+
+def validate_guide_label_regions(before, after, regions):
+    """Check the exact reviewed guide replacement against its display regions."""
+    if not isinstance(after, bytes) or len(after) > 16 * 1024 * 1024:
+        raise ValueError('engineering label PNG capacity exceeded')
+    if not isinstance(regions, list) or not 1 <= len(regions) <= 16:
+        raise ValueError('reviewed guide label regions required')
+    with Image.open(io.BytesIO(before), formats=['PNG']) as original, Image.open(
+        io.BytesIO(after), formats=['PNG']
+    ) as candidate:
+        width, height = original.size
+        if candidate.size != original.size or width * height > 12_000_000:
+            raise ValueError('engineering label PNG geometry changed')
+        for box in regions:
+            if (not isinstance(box, list) or len(box) != 4 or any(type(x) is not int for x in box)
+                    or not (0 <= box[0] < box[2] <= width and 0 <= box[1] < box[3] <= height)):
+                raise ValueError('invalid engineering label region')
+        area = sum((r-l)*(b-t) for l,t,r,b in regions)
+        if area > width * height // 10:
+            raise ValueError('engineering label regions exceed the display area limit')
+        diff = ImageChops.difference(original.convert('RGB'), candidate.convert('RGB'))
+        if any(diff.crop(box).getbbox() is None for box in regions):
+            raise ValueError('a reviewed engineering label region did not change')
+    inclusive = [[l, t, r-1, b-1] for l, t, r, b in regions]
+    if not outside_regions_unchanged(before, after, inclusive):
+        raise ValueError('engineering label edit changed pixels outside reviewed regions')

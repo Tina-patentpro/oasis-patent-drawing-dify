@@ -101,7 +101,8 @@ def validate_guide_readiness(bundle: dict, plan: dict, view: dict, guide: dict, 
     source_parts = source_known_parts(bundle, plan, view)
     region = next((r for r in bundle.get('figure_candidates', []) if r['id']==view.get('source_region_id')), None)
     page = next((p for p in bundle.get('pages', []) if region and p['id']==region['page_id']), {})
-    source_image = page.get('image', {}).get('sha256')
+    from .source_geometry import source_region_basis
+    source_image = source_region_basis(region, page)[0] if region else None
     bound_parts = {b.get('part_id') for b in guide.get('source_region_bindings', [])
                    if source_image and b.get('source_image_sha256') == source_image
                    and b.get('source_region_id') == view.get('source_region_id')

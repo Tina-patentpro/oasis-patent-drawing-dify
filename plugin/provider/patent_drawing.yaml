@@ -31,6 +31,15 @@ credentials_for_provider:
     help:
       en_US: Dify文件URL的精确协议、主机和端口，例如https://dify.example.com；处理Dify URL文件时必填。
       zh_Hans: Dify文件URL的精确协议、主机和端口，例如https://dify.example.com；处理Dify URL文件时必填。
+  work_app_id:
+    type: text-input
+    required: false
+    label:
+      en_US: Isolated durable-work app ID
+      zh_Hans: 持久任务隔离应用 ID
+    help:
+      en_US: Operator binding for the single isolated application when the SDK omits app identity.
+      zh_Hans: SDK 未提供应用身份时，使用隔离应用的运营方绑定。
   dify_internal_files_url:
     type: text-input
     required: false

@@ -36,7 +36,7 @@ def build_panel_guide(contract: dict, scene: dict, *, _member_requirements=None)
         if any(min(b[2],a[2])>max(b[0],a[0])and min(b[3],a[3])>max(b[1],a[1])for a in targets):
             return fail('panel targets overlap; visibility cannot be added through an overpainted region')
         targets.append(b)
-        if not isinstance(p.get('projection'),dict)or set(p['projection'])-{'origin','scale','tilt'}:
+        if not isinstance(p.get('projection'),dict)or set(p['projection'])-{'origin','scale','tilt','view'}:
             return fail('panel projection cannot add geometry')
         if not isinstance(p.get('sections',[]),list)or len(p.get('sections',[]))>8:
             return fail('bounded local sections required')

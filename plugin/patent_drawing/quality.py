@@ -22,7 +22,7 @@ def check_set(bundle, plan, records):
     for v in plan['views']:
         if v['id'] not in records:
             findings.append({'rule': 'SET-COMPLETE', 'verdict': 'FAIL', 'message': v['id'] + '尚无当前规格图件'})
-        elif v['engine'] in {'source', 'image'}:
+        elif v['engine'] in {'source', 'image', 'parent_crop'}:
             findings.append({'rule': 'FIGURE-VISUAL', 'verdict': 'UNKNOWN', 'message': v['id'] + '实际图形关系及内嵌标记需审阅'})
     from .coverage import coverage_requirements
     return {'coverage':coverage_requirements(bundle,plan),'findings': findings, 'file_identity': 'PASS' if len(records) == len(plan['views']) else 'FAIL',

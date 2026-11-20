@@ -1,10 +1,72 @@
 """Stable part identity is distinct from an optional workflow display mark."""
 import copy
 import re
+from xml.etree import ElementTree
 from .operation_store import canonical, digest
 
 CONTRACT = 'drawing-contract-035-r1'
 FLOW_TYPES = {'flowchart', 'block_diagram', 'sequence'}
+
+
+def mark_pattern(mark):
+    return re.compile(r'(?<![A-Za-z0-9])' + re.escape(mark) + r'(?![A-Za-z0-9])')
+
+
+def visible_vector_marks(view, parts, svg):
+    """A designation must be continuous and tied to its figure object."""
+    root = ElementTree.fromstring(svg)
+    rows = [node for node in root.iter() if node.tag.rsplit('}', 1)[-1] == 'text']
+    visible = {}
+    for part_id in view.get('parts', []):
+        if part_id not in parts or not (mark := parts[part_id].get('label')):
+            continue
+        boundary = mark_pattern(mark)
+        if any(part_id in row.get('data-mark-parts', '').split() and boundary.search(row.text or '') for row in rows):
+            visible[part_id] = mark
+    return visible
+
+
+def bind_vector_numbers(plan):
+    """Bind marks to uniquely named existing objects, leaving geometry intact."""
+    changes = []
+    if plan.get('part_mark_mode') != 'numbered':
+        return changes
+    parts = {part['id']: part for part in plan.get('parts', [])}
+    for view in plan.get('views', []):
+        if view.get('engine') != 'vector':
+            continue
+        scene = view.get('diagram', {})
+        primitives = scene.get('primitives', [])
+        entries = [*scene.get('nodes', []), *[p for p in primitives if p.get('type') == 'text']]
+        for part_id in view.get('parts', []):
+            part = parts.get(part_id)
+            if not part or not part.get('label') or not part.get('name'):
+                continue
+            token = '{{' + part_id + '.label}}'
+            if (any(p.get('type') == 'label' and p.get('part') == part_id for p in primitives)
+                    or any(token in e.get('text', '') for e in entries)):
+                continue
+            name_token = '{{' + part_id + '.name}}'
+            anchors = [e for e in entries if name_token in e.get('text', '')
+                       or e.get('text', '').split('\n')[0].strip() in {
+                           part['name'], part['name'] + ' ' + part['label']
+                       }]
+            # An explicit named object can also appear in a second procedural
+            # step. In that case the earliest explicitly named node gets the
+            # mark, and references elsewhere retain their existing wording.
+            explicit = [entry for entry in anchors if name_token in entry.get('text', '')]
+            if len(explicit) > 1:
+                anchors = explicit[:1]
+            if len(anchors) != 1:
+                continue
+            target = anchors[0]
+            name = name_token if name_token in target['text'] else part['name']
+            printed = name + ' ' + part['label']
+            before = printed if printed in target['text'] else name
+            target['text'] = target['text'].replace(before, name + ' ' + token, 1)
+            changes.append({'view_id': view['id'], 'part_id': part_id,
+                            'target': target.get('id') or target.get('at')})
+    return changes
 
 
 def _name_only_eligible(plan, bundle):

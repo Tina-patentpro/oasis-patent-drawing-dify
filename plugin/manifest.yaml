@@ -1,4 +1,4 @@
-version: 0.3.9
+version: 0.4.02
 type: plugin
 author: tina-patentpro
 name: oasisintwrite_patent_drawing
@@ -6,9 +6,9 @@ label:
   en_US: Patent Drawings — GPT
   zh_Hans: 专利附图-GPT
 description:
-  en_US: Generate and edit patent technical drawings using OpenAI GPT-Image-2.6 Flare.
+  en_US: Generate and edit patent technical drawings using OpenAI GPT-Image-2.6 Flare and Sunburst.
     File-first output; human review required.
-  zh_Hans: 基于OpenAI GPT-Image-2.6 Flare的专利技术附图辅助生成与修改，文件优先输出。
+  zh_Hans: 基于OpenAI GPT-Image-2.6 Flare 与 Sunburst 的专利技术附图辅助生成与修改，文件优先输出。
 icon: icon.png
 created_at: '2026-11-06T00:00:00.000000000Z'
 tags:

@@ -38,11 +38,36 @@ class DrawingError(ValueError):
         super().__init__(f"[{category}] {message}{details}{suffix}")
 
 
+class PlannerResultUnknown(DrawingError):
+    def __init__(self, operation_id, model_calls, request_id=None):
+        super().__init__('result_unknown', '规划结果待核对。可按本次操作标识检查原始回执，系统不会重复发送。', request_id)
+        self.operation_id = operation_id
+        self.model_calls = model_calls
+
+
+class SourceCoverageIncomplete(ValueError):
+    def __init__(self, findings, message):
+        self.findings = findings
+        super().__init__(message)
+
+
 class ImageDispatchNotStarted(DrawingError):
-    """An audited image budget check rejected before the transport claim."""
+    """An audited image preflight rejected before the transport claim."""
 
     def __init__(self, message):
         super().__init__('local_preflight_rejected', message)
+
+
+class SourceLineageMismatch(ImageDispatchNotStarted):
+    def __init__(self):
+        super().__init__('原始来源与已登记的任务谱系不一致，未发送图像请求。请由运营方核对原始记录。')
+
+
+class DuplicateImageRequest(ImageDispatchNotStarted):
+    reason = 'duplicate_image_request'
+
+    def __init__(self):
+        super().__init__('本批次已有相同图像请求，本次未发送图像请求。请核对原请求及已保存的图件。')
 
 
 class ToolInvokeError(RuntimeError):

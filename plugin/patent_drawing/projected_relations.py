@@ -116,7 +116,8 @@ def observe_projected_relations(scene, project, owner, indices, raster, contacts
             radius=(pin_box[3]-pin_box[0])/2
             shaft=[]
             if retained and z0<z1:
-                for angle in (math.atan2(-.7,1),math.atan2(-.7,1)+math.pi):
+                edge_angle = 0 if scene['projection'].get('view') == 'front' else math.atan2(-.7,1)
+                for angle in (edge_angle, edge_angle + math.pi):
                     xy=[x+radius*math.cos(angle),y+radius*math.sin(angle)]
                     line=tuple(project([*xy,z]) for z in (z0,z1))
                     shaft.extend([absolute(p) for p in span[0]]

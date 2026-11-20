@@ -18,16 +18,16 @@ MAX_TOTAL_BYTES = 48 * 1024 * 1024
 MAX_PDF_BYTES = 64 * 1024 * 1024
 
 
-def _caption(value, face_factory=None, centered=False):
+def _caption(value, face_factory=None, centered=False, *, height=140):
     face_factory = face_factory or font
-    image=Image.new('RGB',(1400,140),'white');draw=ImageDraw.Draw(image)
+    image=Image.new('RGB',(1400,height),'white');draw=ImageDraw.Draw(image)
     lines=_lines(value,face_factory(30),1360)
-    if len(lines)>3:fail('图题过长，无法排版')
+    if len(lines) * 40 > height:fail('图题过长，无法排版')
     for i,line in enumerate(lines):draw.text(((1400-face_factory(30).getlength(line))/2 if centered else 20,10+i*40),line,font=face_factory(30),fill='black',anchor='lt')
     out=BytesIO();image.save(out,format='PNG');return out.getvalue()
 
 
-def _pdf(pages, cn_layout=False):
+def _pdf(pages, cn_layout=False, *, review_banner=None):
     objects=[b'',b''];page_ids=[];compressed_total=0
     def add(value):objects.append(value);return len(objects)
     def stream(data,attributes=b''):
@@ -43,12 +43,17 @@ def _pdf(pages, cn_layout=False):
         compressed_total+=len(data)
         if compressed_total>MAX_PDF_BYTES:fail('PDF输出容量超限')
         return add(stream(data,f'/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode'.encode())),width,height
+    from .annotations import regular_font
+    if review_banner:
+        heading, footer = review_banner
+        heading_id, _, _ = image_object(_caption(heading, regular_font, height=110))
+        footer_id, _, _ = image_object(_caption(footer, regular_font, centered=True, height=70))
     for i,(blob,caption)in enumerate(pages,1):
-        from .annotations import regular_font
         iid,width,height=image_object(blob);cid,_,_=image_object(_caption(caption,regular_font if cn_layout else None,centered=cn_layout))
         if cn_layout:
             # A4: left/top 25mm, right/bottom 15mm. Caption BELOW drawing.
-            scale=min(480/width,630/height);w,h=width*scale,height*scale;x=71+(480-w)/2;y=130+(630-h)/2
+            available_height = 575 if review_banner else 630
+            scale=min(480/width,available_height/height);w,h=width*scale,height*scale;x=71+(480-w)/2;y=130+(630-h)/2
             commands=(f'q {w:.3f} 0 0 {h:.3f} {x:.3f} {y:.3f} cm /I Do Q\n'
                       f'q 480 0 0 48 71 {y-55:.3f} cm /C Do Q\n'
                       f'BT /F1 10 Tf 305 48 Td ({i}) Tj ET').encode()
@@ -57,8 +62,18 @@ def _pdf(pages, cn_layout=False):
             commands=(f'q {w:.3f} 0 0 {h:.3f} {x:.3f} {y:.3f} cm /I Do Q\n'
                       f'q 525 0 0 52.5 35 767 cm /C Do Q\n'
                       f'BT /F1 9 Tf 285 30 Td ({i} / {len(pages)}) Tj ET').encode()
+        review_resources = b''
+        if review_banner:
+            if i == 1:
+                commands += b'\nq 480 0 0 38 71 733 cm /ReviewHeading Do Q'
+                review_resources = f' /ReviewHeading {heading_id} 0 R'.encode()
+            commands += b'\nq 480 0 0 24 71 57 cm /ReviewFooter Do Q'
+            review_resources += f' /ReviewFooter {footer_id} 0 R'.encode()
         content=add(stream(commands))
-        page_ids.append(add(f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.276 841.89] /Resources << /XObject << /I {iid} 0 R /C {cid} 0 R >> /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents {content} 0 R >>'.encode()))
+        resources = f'/XObject << /I {iid} 0 R /C {cid} 0 R'.encode() + review_resources
+        resources += b' >> /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>'
+        page = b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.276 841.89] /Resources << '
+        page_ids.append(add(page + resources + f' >> /Contents {content} 0 R >>'.encode()))
     objects[0]=b'<< /Type /Catalog /Pages 2 0 R >>'
     objects[1]=f'<< /Type /Pages /Count {len(page_ids)} /Kids ['.encode()+b' '.join(f'{p} 0 R'.encode()for p in page_ids)+b'] >>'
     out=bytearray(b'%PDF-1.4\n%\xe2\xe3\xcf\xd3\n');offsets=[0]

@@ -29,6 +29,10 @@ from gevent.local import local as execution_local
 _owner_locks = execution_local()
 
 
+class WorkspaceBusy(ValueError):
+    pass
+
+
 class OperationStore:
     def __init__(self, root):
         self.root = Path(root).absolute()
@@ -42,6 +46,16 @@ class OperationStore:
             c.execute('CREATE TABLE IF NOT EXISTS ops(owner TEXT, op TEXT, identity TEXT, state TEXT, result BLOB, PRIMARY KEY(owner,op))')
             c.execute('CREATE TABLE IF NOT EXISTS items(owner TEXT, name TEXT, value BLOB, PRIMARY KEY(owner,name))')
             c.execute('CREATE TABLE IF NOT EXISTS budgets(owner TEXT, scope TEXT, kind TEXT, cap INTEGER, used INTEGER, PRIMARY KEY(owner,scope,kind))')
+            c.execute('''CREATE TABLE IF NOT EXISTS work_jobs(
+                task_id TEXT PRIMARY KEY, app_id TEXT NOT NULL, build TEXT NOT NULL,
+                owner TEXT NOT NULL, workspace TEXT NOT NULL, kind TEXT NOT NULL,
+                status TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL,
+                lease_until REAL NOT NULL DEFAULT 0, lease_token TEXT,
+                payload BLOB NOT NULL, snapshot BLOB NOT NULL)''')
+            c.execute('''CREATE INDEX IF NOT EXISTS work_jobs_claim
+                         ON work_jobs(app_id,build,status,lease_until,updated)''')
+            c.execute('''CREATE INDEX IF NOT EXISTS work_jobs_owner
+                         ON work_jobs(app_id,owner,workspace,created)''')
         self.db.chmod(0o600)
 
     @contextmanager
@@ -78,7 +92,7 @@ class OperationStore:
         descriptor = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
         try:
             try: fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError: raise ValueError('workspace busy; concurrent action rejected before changing state') from None
+            except BlockingIOError: raise WorkspaceBusy('workspace busy; concurrent action rejected before changing state') from None
             active[key] = descriptor
             try: yield
             finally: active.pop(key, None);fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -86,15 +100,24 @@ class OperationStore:
             os.close(descriptor)
 
     def run_once(self, owner, operation_id, identity, producer, budget=None):
+        from .errors import DuplicateImageRequest
         artifact_owner=owner
         owner = self._owner(owner)
         if not isinstance(operation_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,120}', operation_id):
             raise ValueError('invalid operation id')
         key = digest(identity)
+        params = (owner, operation_id)
+        select = 'SELECT identity,state,result FROM ops WHERE owner=? AND op=?'
+        with self.connect() as c:
+            row = c.execute(select, params).fetchone()
+        if row and row[1] != 'local_preflight_rejected':
+            return self._read_operation_result(artifact_owner, operation_id, key, row)
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
-            row = c.execute('SELECT identity,state,result FROM ops WHERE owner=? AND op=?', (owner, operation_id)).fetchone()
+            row = c.execute(select, params).fetchone()
             reclaimed = row is not None and row[:2] == (key, 'local_preflight_rejected') and (budget or {}).get('kind') == 'image'
+            if reclaimed and (json.loads(row[2]).get('error') or {}).get('reason') == DuplicateImageRequest.reason:
+                raise DuplicateImageRequest()
             inserted = row is None or reclaimed
             if inserted:
                 if budget is not None:
@@ -112,16 +135,8 @@ class OperationStore:
                 else:
                     c.execute('INSERT INTO ops VALUES(?,?,?,?,?)', (owner, operation_id, key, 'dispatching', None))
                 row = (key, 'dispatching', None)
-        if row[0] != key:
-            raise ValueError('operation identity mismatch')
         if not inserted:
-            if row[1] == 'response_saved':
-                return json.loads(row[2])
-            if row[1]in{'provider_rejected','response_saved_unusable'}:
-                from .errors import DrawingError
-                saved=json.loads(row[2]);error=saved['error']
-                raise DrawingError(error['category'],'已保存本次失败结果；未自动重试',error.get('request_id'))
-            raise ValueError('UNKNOWN: operation was dispatched; never retry automatically')
+            return self._read_operation_result(artifact_owner, operation_id, key, row)
         # Intent has been committed BEFORE invoking an external side effect.
         try:
             result = producer()
@@ -130,6 +145,8 @@ class OperationStore:
             terminal='result_unknown';summary={'category':'result_unknown'}
             if isinstance(error, ImageDispatchNotStarted) and (budget or {}).get('kind') == 'image':
                 summary = {'category': error.category, 'message': error.public_message}
+                if isinstance(error, DuplicateImageRequest):
+                    summary['reason'] = error.reason
                 terminal = error.category
                 result = canonical({'error': summary}).encode()
                 receipt = canonical({'op': operation_id, 'identity_sha256': key, 'result': summary,
@@ -158,16 +175,129 @@ class OperationStore:
         encoded = canonical(result).encode()
         if len(encoded) > 80 * 1024 * 1024:
             raise ValueError('response evidence exceeds storage limit; UNKNOWN')
-        with self.connect() as c:
-            c.execute('UPDATE ops SET state=?,result=? WHERE owner=? AND op=?', ('response_saved', encoded, owner, operation_id))
+        # Persist the completed response independently of SQLite's writer.
+        # The receipt is scoped to the already claimed owner and operation.
+        self._save_response_checkpoint(artifact_owner, operation_id, key, encoded)
+        self._commit_response(owner, operation_id, key, encoded)
         return result
 
-    def operation_status(self,owner,operation_id):
+    def _read_operation_result(self, owner, operation_id, expected, row):
+        identity, state, payload = row
+        if identity != expected:
+            raise ValueError('operation identity mismatch')
+        if state == 'response_saved':
+            return json.loads(payload)
+        if state in {'provider_rejected', 'response_saved_unusable'}:
+            from .errors import DrawingError
+            error = json.loads(payload)['error']
+            message = ('规划返回截断，已保存原响应及请求回执。'
+                       if error['category'] == 'planner_output_truncated' else '已保存本次失败结果；未自动重试')
+            raise DrawingError(error['category'], message, error.get('request_id'),
+                               upstream_code=error.get('code'), http_status=error.get('http_status'))
+        if state == 'dispatching':
+            encoded = self._read_response_checkpoint(owner, operation_id, identity)
+            if encoded is not None:
+                result = json.loads(encoded)
+                self._commit_response(self._owner(owner), operation_id, identity, encoded)
+                return result
+        raise ValueError('UNKNOWN: operation was dispatched; never retry automatically')
+
+    def _response_checkpoint(self, owner, operation_id, identity):
+        folder = self.root / self._owner(owner)
+        if folder.is_symlink():
+            raise ValueError('symlink owner directory')
+        return folder / ('response-' + digest([operation_id, identity]) + '.json')
+
+    def _save_response_checkpoint(self, owner, operation_id, identity, encoded):
+        path = self._response_checkpoint(owner, operation_id, identity)
+        path.parent.mkdir(mode=0o700, exist_ok=True)
+        fd, name = tempfile.mkstemp(dir=path.parent)
+        try:
+            with os.fdopen(fd, 'wb') as file:
+                file.write(hashlib.sha256(encoded).hexdigest().encode() + b'\n')
+                file.write(encoded)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(name, path)
+            self._sync_directory(path.parent)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
+
+    def _read_response_checkpoint(self, owner, operation_id, identity):
+        path = self._response_checkpoint(owner, operation_id, identity)
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 80 * 1024 * 1024 + 65:
+                return None
+            saved_hash, _, encoded = path.read_bytes().partition(b'\n')
+        except OSError:
+            return None
+        if hashlib.sha256(encoded).hexdigest().encode() != saved_hash:
+            return None
+        return encoded
+
+    def _commit_response(self, owner, operation_id, identity, encoded, *, allow_unknown=False):
+        with self.connect() as connection:
+            updated = connection.execute(
+                "UPDATE ops SET state='response_saved',result=? "
+                "WHERE owner=? AND op=? AND identity=? AND state IN ('dispatching',?)",
+                (encoded, owner, operation_id, identity, 'result_unknown' if allow_unknown else 'dispatching'),
+            )
+            if updated.rowcount != 1:
+                row = connection.execute('SELECT identity,state,result FROM ops WHERE owner=? AND op=?',
+                                         (owner, operation_id)).fetchone()
+                if row != (identity, 'response_saved', encoded):
+                    raise ValueError('saved response cannot be bound to the interrupted operation')
+
+    def recover_response(self, owner, operation_id, identity, result, *, allow_unknown=False):
+        """Finalize a verified saved response without a new dispatch or budget claim."""
+        encoded = canonical(result).encode()
+        if len(encoded) > 80 * 1024 * 1024:
+            raise ValueError('response evidence exceeds storage limit; UNKNOWN')
+        self._commit_response(self._owner(owner), operation_id, digest(identity), encoded, allow_unknown=allow_unknown)
+
+    def recover_truncated_response(self, owner, operation_id, identity, error):
+        """Record a verified HTTP 200 truncation against its original dispatch."""
+        if error.category != 'planner_output_truncated' or error.http_status != 200:
+            raise ValueError('saved response does not prove truncation')
+        self.recover_unusable_plan_response(owner, operation_id, identity, error)
+
+    def recover_unusable_plan_response(self, owner, operation_id, identity, error):
+        if (error.http_status != 200 or error.category not in {
+            'planner_output_truncated', 'planner_invalid_output', 'planner_incomplete'
+        }):
+            raise ValueError('saved response does not prove an unusable plan')
+        captured = self.put_artifact(owner, error._response_body)
+        summary = {'category': error.category, 'request_id': error.request_id,
+                   'http_status': error.http_status, 'code': error.upstream_code, 'response_ref': captured}
+        with self.connect() as connection:
+            updated = connection.execute(
+                "UPDATE ops SET state='response_saved_unusable',result=? "
+                "WHERE owner=? AND op=? AND identity=? AND state IN ('dispatching', 'result_unknown')",
+                (canonical({'error': summary}).encode(), self._owner(owner), operation_id, digest(identity)),
+            )
+            if updated.rowcount != 1:
+                raise ValueError('saved unusable response no longer matches its operation')
+
+    def recover_refusal(self, owner, operation_id, identity, summary):
+        """Project a verified refusal into the same claimed operation."""
+        with self.connect() as connection:
+            updated = connection.execute(
+                "UPDATE ops SET state='provider_rejected',result=? WHERE owner=? AND op=? AND identity=? AND state='dispatching'",
+                (canonical({'error': summary}).encode(), self._owner(owner), operation_id, digest(identity)),
+            )
+            if updated.rowcount != 1:
+                raise ValueError('saved refusal no longer matches its operation')
+
+    def operation_status(self,owner,operation_id, *, check_checkpoint=True):
         with self.connect()as c:
-            row=c.execute('SELECT state,result FROM ops WHERE owner=? AND op=?',(self._owner(owner),operation_id)).fetchone()
-        if row is None:return {'state':'not_started'}
+            row=c.execute('SELECT state,result,identity FROM ops WHERE owner=? AND op=?',(self._owner(owner),operation_id)).fetchone()
+        if row is None:return {'state':'not_started','error':None,'response_saved':False}
         result=json.loads(row[1])if row[1]is not None else {}
-        return {'state':row[0],'error':result.get('error'),'response_saved':row[0]=='response_saved'}
+        state = row[0]
+        if check_checkpoint and state == 'dispatching' and self._read_response_checkpoint(owner, operation_id, row[2]) is not None:
+            state = 'response_saved'
+        return {'state':state,'error':result.get('error'),'response_saved':state=='response_saved'}
 
     def dispatch_count(self, owner, operation_id):
         with self.connect() as c:
@@ -186,16 +316,34 @@ class OperationStore:
         target = directory / h
         if target.is_symlink():
             raise ValueError('symlink artifact')
-        if not target.exists():
+        previous = target.read_bytes() if target.is_file() and target.stat().st_size <= 64 * 1024 * 1024 else None
+        if target.exists() and previous is None:
+            raise ValueError('oversized or non-file artifact; restore manually from exact backup')
+        if previous is not None and previous != blob:
+            # Keep invalid bytes for diagnosis before restoring from verified input.
+            with tempfile.NamedTemporaryFile(dir=directory, prefix='invalid-' + h + '-', delete=False) as original:
+                original.write(previous)
+                original.flush()
+                os.fsync(original.fileno())
+        if previous != blob:
             fd, tmp = tempfile.mkstemp(dir=directory)
             try:
                 with os.fdopen(fd, 'wb') as f:
                     f.write(blob); f.flush(); os.fsync(f.fileno())
                 os.replace(tmp, target)
+                self._sync_directory(directory)
             finally:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
         return {'artifact_id': owner + '/' + h, 'sha256': h, 'bytes': len(blob)}
+
+    @staticmethod
+    def _sync_directory(directory):
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     def get_artifact(self, owner, reference):
         if not isinstance(reference, dict):
@@ -220,6 +368,18 @@ class OperationStore:
             raise ValueError('state capacity exceeded')
         with self.connect() as c:
             c.execute('INSERT OR REPLACE INTO items VALUES(?,?,?)', (self._owner(owner), name, encoded))
+
+    def copy_items_for_workspace(self, owner, original, fork):
+        """Copy only reviewed, reusable reference inputs when forking a comparison."""
+        owner = self._owner(owner)
+        prefixes = ('reference-preparation', 'reference-bundle', 'prepared-guide',
+                    'source-geometry', 'expression', 'member-requirements', 'source-profile')
+        with self.connect() as connection:
+            for prefix in prefixes:
+                before, after = prefix + ':' + original + ':', prefix + ':' + fork + ':'
+                connection.execute('''INSERT OR IGNORE INTO items(owner,name,value)
+                    SELECT owner,?||substr(name,?),value FROM items
+                    WHERE owner=? AND substr(name,1,?)=?''', (after, len(before) + 1, owner, len(before), before))
 
     def load(self, owner, name):
         with self.connect() as c:

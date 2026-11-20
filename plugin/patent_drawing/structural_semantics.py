@@ -120,6 +120,9 @@ def validate_structure(scene: dict, guide: dict, contract: dict, *, member_requi
     def touch(a, b):
         return all(min(a[i+3], b[i+3]) >= max(a[i], b[i])-1e-7 for i in range(3))
     def center(b, i): return (b[i]+b[i+3])/2
+    def bounds_opening(wall, opening, at_end):
+        x, y, _ = wall['path'][-1 if at_end else 0]
+        return abs(x-opening[0 if at_end else 3])<1e-7 and opening[1]<=y<=opening[4]
     participated={ident:set()for ident in instances}
     for rel in relations:
         if not isinstance(rel, dict): check('STRUCTURE-RELATION', False, 'relation required'); continue
@@ -243,6 +246,17 @@ def validate_structure(scene: dict, guide: dict, contract: dict, *, member_requi
                    and any(touch(sb,t['bounds'])for t in troughs)
                    and any(f.get('subject')==shield['part_id']and all(f.get('object')==t['part_id']for t in troughs)for f in typed))
             check('STRUCTURE-SHIELD-TROUGH',valid,'source shield layer contacts its own rear trough; optional welding target does not remove shield',refs)
+            openings = [
+                instances[r['opening']]['bounds'] for r in relations
+                if isinstance(r, dict) and r.get('kind')=='cable_weld_access'
+                and r.get('opening') in instances and set(r.get('troughs', []))==set(rel.get('troughs', []))
+            ]
+            for wall in troughs:
+                joins_groove = wall['role']=='rear_trough' and (touch(sb, wall['bounds'])
+                    or any(bounds_opening(wall, opening, True) or bounds_opening(wall, opening, False)
+                           for opening in openings))
+                check('STRUCTURE-TROUGH-WALL-OWNERSHIP', joins_groove,
+                      'each rear wall meets the shield or terminates at the documented opening', [wall['id']])
         elif kind == 'cable_weld_access':
             body,opening,target=(instances[rel[k]]for k in ('body','opening','target'))
             ob,bb=opening['bounds'],body['bounds'];walls=[instances[i]for i in rel.get('troughs',[])]
@@ -253,8 +267,8 @@ def validate_structure(scene: dict, guide: dict, contract: dict, *, member_requi
                  and target['role']in {'shield','drain_wire'}and bool(walls)
                  and all(w['role']=='rear_trough'for w in walls)
                  and bb[0]<=ob[0]<ob[3]<=bb[3]and bb[1]<=ob[1]<ob[4]<=bb[4]and ob[2]>=bb[5]
-                 and any(abs(w['path'][-1][0]-ob[0])<1e-7 and ob[1]<=w['path'][-1][1]<=ob[4]for w in walls)
-                 and any(abs(w['path'][0][0]-ob[3])<1e-7 and ob[1]<=w['path'][0][1]<=ob[4]for w in walls))
+                 and any(bounds_opening(w,ob,True)for w in walls)
+                 and any(bounds_opening(w,ob,False)for w in walls))
             def segment_hits(a,b,box):
                 lo,hi=0.,1.
                 for i in range(3):

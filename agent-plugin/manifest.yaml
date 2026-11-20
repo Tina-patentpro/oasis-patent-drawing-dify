@@ -1,0 +1,28 @@
+version: 0.3.77
+type: plugin
+author: tina-patentpro
+name: patent_drawing_preparation
+label:
+  en_US: Patent drawing preparation
+  zh_Hans: 专利复杂图准备
+description:
+  en_US: Prepare source-bound complex figures through the patent drawing workspace.
+  zh_Hans: 通过专利附图工作区准备复杂图。
+icon: icon.png
+created_at: '2026-11-13T00:00:00.000000000Z'
+tags: [productivity]
+meta:
+  version: 0.0.1
+  arch: [amd64, arm64]
+  runner:
+    language: python
+    version: '3.12'
+    entrypoint: main
+plugins:
+  agent_strategies:
+  - agent/provider.yaml
+resource:
+  memory: 134217728
+  permission:
+    tool:
+      enabled: true

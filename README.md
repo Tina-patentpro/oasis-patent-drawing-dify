@@ -23,5 +23,6 @@
 
 - [插件源码](plugin/) 的 84 个运行文件来自同一签名包，并逐项校验。
 - [Chatflow 构建器](chatflows/build_quality_chatflow.py) 生成可导入的 DSL，可用 `--uid` 绑定指定插件内容身份。
+- 0.3.70 候选用 `--figure-routing` 启用多图型工作流。已确认交底进入规划时，GPT‑6 Luna 在一次 Decisions 请求中分别判断结构、流程、系统、时序、关系和原始证据图，可选中多类。各专用节点提供制图要求，共用一个图单和部件登记。首次规划最多一次 Decisions 和一次 Responses，两者均计入现有文本预算。两次派发均依赖实例私有模型策略。用户确认图单后进入逐图执行。
 - 在 `plugin/` 中使用 Python 3.12。安装 `requirements.txt` 和 pytest 后，可运行 `python -m pytest -q tests` 执行随包的离线检查。
 - 使用 Dify 官方 CLI 构建插件，命令为 `python tools/package_plugin.py --cli <Dify CLI 路径> --output <安装包路径>`。

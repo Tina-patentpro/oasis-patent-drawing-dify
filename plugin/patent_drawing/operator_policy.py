@@ -1,10 +1,12 @@
 """Private worker policy and audit transport; never enabled by tool/model JSON."""
 import hashlib,json,os,re,sqlite3,time,datetime
 import stat
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 import httpx
-from .errors import DrawingError, ImageDispatchNotStarted
+from .errors import DrawingError, DuplicateImageRequest, ImageDispatchNotStarted, SourceLineageMismatch
 
 @dataclass(frozen=True)
 class OperatorPolicy:
@@ -16,6 +18,102 @@ class OperatorPolicy:
     recovery_authorizations:tuple=()
     blocked_lineages:tuple=()
     continuity:dict|None=None
+
+
+_work_context = ContextVar('patent_drawing_work_context', default=None)
+_work_operation = ContextVar('patent_drawing_work_operation', default=None)
+
+
+@contextmanager
+def bound_work_task(app_id, build_sha, task_id, owner_key):
+    token = _work_context.set((app_id, build_sha, task_id, owner_key))
+    operation = _work_operation.set(None)
+    try:
+        yield
+    finally:
+        _work_operation.reset(operation)
+        _work_context.reset(token)
+
+
+def bind_work_operation(operation_id):
+    if _work_context.get() and operation_id:
+        _work_operation.set(operation_id)
+
+
+def work_audit_headers(transport):
+    if isinstance(transport, AuditedTransport) and _work_context.get() and _work_operation.get():
+        return {'x-patent-work-context': '/'.join((*_work_context.get(), _work_operation.get()))}
+    return {}
+
+
+def _read_audit_file(path, size):
+    if any(parent.is_symlink() for parent in [path, *path.parents]):
+        raise ValueError('unsafe audited response path')
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o022 or not 1 <= metadata.st_size <= size:
+            raise ValueError('unsafe audited response size or ownership')
+        content = stream.read(size + 1)
+        if len(content) != metadata.st_size:
+            raise ValueError('audited response changed during read')
+        return content
+
+
+def read_audited_work_response(policy, original_policy, context, operation_id, request_matches, endpoints):
+    """Read one exact terminal HTTP pair. This path never enters the transport."""
+    from .ledger_continuity import guard
+
+    if original_policy is None:
+        return None
+    run = original_policy['run_id']
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', run):
+        return None
+    root = policy.ledger_root
+    db = root / 'http.sqlite3'
+    try:
+        if db.is_symlink():
+            return None
+        with guard(root, policy.continuity), sqlite3.connect(db.as_uri() + '?mode=ro', uri=True) as ledger:
+            rows = ledger.execute(
+                '''SELECT c.slot,c.kind,c.state,c.status,c.request_id,r.policy,w.response_sha256,
+                          w.headers_sha256,s.request_slot
+                   FROM work_audit w JOIN calls c ON c.run=w.run AND c.slot=w.slot
+                   JOIN runs r ON r.run=c.run
+                   JOIN request_slots s ON s.run=c.run AND s.slot=c.slot
+                   WHERE w.app=? AND w.build=? AND w.task=? AND w.owner=? AND w.operation=? AND w.run=?''',
+                (*context, operation_id, run)).fetchall()
+            if len(rows) != 1:
+                return None
+            slot, kind, state, status, request_id, policy_sha, response_sha, headers_sha, request_slot = rows[0]
+            if (not re.fullmatch(r'[a-f0-9]{64}', slot) or policy_sha != original_policy['sha256']
+                    or state not in {'response_saved', 'provider_rejected'} or not response_sha or not headers_sha):
+                return None
+            folder = root / run / slot
+            intent = json.loads(_read_audit_file(folder / 'intent.json', 8192))
+            url = intent.get('url')
+            if (endpoints.get(url) != kind or intent.get('run_id') != run or intent.get('kind') != kind
+                    or intent.get('policy_sha256') != policy_sha or intent.get('automatic_retries') != 0):
+                return None
+            raw = _read_audit_file(folder / 'request.json', 64 * 1024 * 1024)
+            if (hashlib.sha256(raw).hexdigest() != intent.get('request_sha256')
+                    or hashlib.sha256((url + '\n').encode() + raw).hexdigest() != request_slot
+                    or not request_matches(raw)):
+                return None
+            raw_headers = _read_audit_file(folder / 'headers.json', 8192)
+            body = _read_audit_file(folder / 'response.bin', 32 * 1024 * 1024)
+            if (hashlib.sha256(raw_headers).hexdigest() != headers_sha
+                    or hashlib.sha256(body).hexdigest() != response_sha):
+                return None
+            receipt = json.loads(raw_headers)
+            if (receipt.get('status') != status or not isinstance(receipt.get('headers'), dict)
+                    or receipt['headers'].get('x-request-id') != request_id
+                    or (state == 'response_saved' and status != 200)
+                    or (state == 'provider_rejected' and not (400 <= status < 500 and status != 408))):
+                return None
+            return {'status': status, 'headers': receipt['headers'], 'body_sha256': response_sha,
+                    'request_sha256': intent['request_sha256'], 'body': body, 'request': raw}
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, sqlite3.Error):
+        return None
 
 
 def authorize_dispatch(lineage:dict,candidate_sha:str,authorization:dict|None)->dict:
@@ -89,6 +187,17 @@ def configured_transport():
 
 def verify_budget_non_dispatch(workspace_id, view_id, evidence, native_terminal_raw, enabled_policy_raw, request_raw):
     """Verify an inspected finite-estimate rejection on the continuous local audit ledger."""
+    return _verify_local_non_dispatch(workspace_id, view_id, evidence, native_terminal_raw,
+                                      enabled_policy_raw, request_raw, duplicate=False)
+
+
+def verify_duplicate_non_dispatch(workspace_id, view_id, evidence, native_terminal_raw, enabled_policy_raw, request_raw):
+    """Verify a legacy same-run duplicate against its exact earlier successful request."""
+    return _verify_local_non_dispatch(workspace_id, view_id, evidence, native_terminal_raw,
+                                      enabled_policy_raw, request_raw, duplicate=True)
+
+
+def _verify_local_non_dispatch(workspace_id, view_id, evidence, native_terminal_raw, enabled_policy_raw, request_raw, *, duplicate):
     if os.environ.get('PATENT_DRAWING_ISOLATED_WORKER') != '1':
         raise ValueError('non-dispatch reconciliation requires the private isolated worker')
     path = os.environ.get('PATENT_DRAWING_OPERATOR_POLICY')
@@ -106,9 +215,12 @@ def verify_budget_non_dispatch(workspace_id, view_id, evidence, native_terminal_
             or not isinstance(enabled, dict)
             or enabled.get('schema') != 'patent-run-policy-1' or enabled.get('enabled') is not True
             or enabled.get('run_id') != run_id or enabled.get('ledger_root') != str(policy.ledger_root)
-            or not isinstance(enabled.get('limits'), dict) or type(enabled['limits'].get('image')) is not int
-            or enabled['limits']['image'] < 0):
-        raise ValueError('original finite operator policy differs')
+            or not isinstance(enabled.get('limits'), dict)
+            or 'image' not in enabled['limits']):
+        raise ValueError('original operator policy differs')
+    cap = enabled['limits']['image']
+    if (cap is not None or not duplicate) and (type(cap) is not int or cap < 0):
+        raise ValueError('original image limit differs')
     native = json.loads(native_terminal_raw)
     out = native.get('out') if isinstance(native, dict) else None
     terminal = out.get('terminal') if isinstance(out, dict) else None
@@ -116,15 +228,25 @@ def verify_budget_non_dispatch(workspace_id, view_id, evidence, native_terminal_
     if (not isinstance(terminal, dict) or not isinstance(workflow_id, str)
             or not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', workflow_id)
             or out.get('kind') != 'native_real'
-            or type(out.get('provider_dispatches')) is not int or out['provider_dispatches'] != 1
+            or type(out.get('provider_dispatches')) is not int or out['provider_dispatches'] < 1
+            or (not duplicate and out['provider_dispatches'] != 1)
             or type(out.get('llm_dispatches')) is not int or out['llm_dispatches'] != 0
             or out.get('invocation_returned') is not True
             or terminal.get('id') != workflow_id or terminal.get('status') != 'failed'
             or terminal.get('outputs') != {}
             or type(terminal.get('total_tokens')) is not int or terminal['total_tokens'] != 0
-            or not isinstance(terminal.get('error'), str) or not terminal['error'].endswith(
-                '[drawing_workspace_error] finite group requires private whole-plan estimate')):
+            or not isinstance(terminal.get('error'), str)
+            or not terminal['error'].endswith('[drawing_workspace_error] ' + (
+                'request already dispatched; automatic retry forbidden' if duplicate else
+                'finite group requires private whole-plan estimate'))):
         raise ValueError('native terminal does not prove the known local preflight rejection')
+    if duplicate:
+        metadata = native.get('metadata')
+        if (native.get('artifacts') != [] or type(terminal.get('created_at')) is not int
+                or not isinstance(metadata, list) or not metadata
+                or any(not isinstance(item, dict) or item.get('workspace_id') != workspace_id
+                       or type(item.get('model_calls')) is not int or item['model_calls'] != 0 for item in metadata)):
+            raise ValueError('native duplicate evidence does not bind a zero-call workspace')
     from .ledger_continuity import guard, validate_config
     root = policy.ledger_root
     continuity = enabled.get('continuity')
@@ -136,20 +258,37 @@ def verify_budget_non_dispatch(workspace_id, view_id, evidence, native_terminal_
     if json.loads(attestation) != expected:
         raise ValueError('trusted non-dispatch attestation identity differs')
     db = root / 'http.sqlite3'
-    if db.is_symlink() or (root / run_id).exists():
+    if db.is_symlink() or (not duplicate and (root / run_id).exists()):
         raise ValueError('unexpected original dispatch or estimate directory')
     slots = [hashlib.sha256((f'https://api.openai.com/v1/images/{endpoint}\n').encode() + request_raw).hexdigest()
              for endpoint in ('edits', 'generations')]
     with guard(root, continuity), sqlite3.connect(db.as_uri()+'?mode=ro', uri=True) as ledger:
-        if (ledger.execute('select policy from runs where run=?', (run_id,)).fetchone() != (evidence['policy_sha256'],)
-                or ledger.execute('select 1 from calls where run=?', (run_id,)).fetchone()
-                or ledger.execute('select 1 from calls c left join request_slots s on c.run=s.run and c.slot=s.slot '
-                                  'where coalesce(s.request_slot,c.slot) in (?, ?)', slots).fetchone()):
+        if ledger.execute('select policy from runs where run=?', (run_id,)).fetchone() != (evidence['policy_sha256'],):
+            raise ValueError('original local rejection cannot be reconciled with the HTTP audit ledger')
+        prior_slot = None
+        if duplicate:
+            rows = ledger.execute(
+                'select c.run,c.slot,c.kind,c.state,c.status,c.started,l.source,l.lineage '
+                'from calls c left join request_slots s on c.run=s.run and c.slot=s.slot '
+                'left join lineage_calls l on c.run=l.run and c.slot=l.slot '
+                'where coalesce(s.request_slot,c.slot) in (?, ?)', slots).fetchall()
+            same_run = [r for r in rows if r[0] == run_id]
+            if (len(same_run) != 1 or any(r[2:5] != ('image', 'response_saved', 200) for r in rows)
+                    or same_run[0][1] not in slots or same_run[0][5] >= terminal['created_at']
+                    or same_run[0][6:] != (evidence['source_sha256'], evidence['lineage_sha256'])):
+                raise ValueError('duplicate cannot be reconciled with one earlier successful same-run request')
+            prior_slot = same_run[0][1]
+        elif (ledger.execute('select 1 from calls where run=?', (run_id,)).fetchone()
+              or ledger.execute('select 1 from calls c left join request_slots s on c.run=s.run and c.slot=s.slot '
+                                'where coalesce(s.request_slot,c.slot) in (?, ?)', slots).fetchone()):
             raise ValueError('original local rejection cannot be reconciled with the HTTP audit ledger')
         count = ledger.execute('select count(*) from calls').fetchone()[0]
-    return {'workflow_run_id': workflow_id, 'audit_calls_at_review': count,
-            'closed_policy_sha256': policy.sha256, 'ledger_id': continuity['ledger_id'],
-            'attestation_sha256': hashlib.sha256(attestation).hexdigest()}
+    proof = {'workflow_run_id': workflow_id, 'audit_calls_at_review': count,
+             'closed_policy_sha256': policy.sha256, 'ledger_id': continuity['ledger_id'],
+             'attestation_sha256': hashlib.sha256(attestation).hexdigest()}
+    if duplicate:
+        proof['prior_success_slot'] = prior_slot
+    return proof
 
 
 def _read_no_dispatch_attestation(policy_path, operation_id):
@@ -194,6 +333,9 @@ class AuditedTransport(httpx.BaseTransport):
             c.execute('create table if not exists request_slots(run text,slot text,request_slot text,primary key(run,slot))')
             c.execute('create table if not exists lineage_calls(run text,slot text,lineage text,source text,primary key(run,slot))')
             c.execute('create table if not exists recovery_uses(id text primary key,previous text,run text,slot text)')
+            c.execute('''CREATE TABLE IF NOT EXISTS work_audit(run TEXT, slot TEXT, app TEXT, build TEXT,
+                        task TEXT, owner TEXT, operation TEXT, response_sha256 TEXT, headers_sha256 TEXT,
+                        PRIMARY KEY(run,slot), UNIQUE(app,build,task,owner,operation))''')
             row=c.execute('select policy from runs where run=?',(policy.run_id,)).fetchone()
             if row and row[0]!=policy.sha256:raise ValueError('operator policy changed for an existing run')
             for a in policy.recovery_authorizations:
@@ -213,6 +355,17 @@ class AuditedTransport(httpx.BaseTransport):
         from .ledger_continuity import guard
         with guard(self.policy.ledger_root,self.policy.continuity):
             return self._handle_request(request)
+
+    def validate_image_lineage(self, source_sha, lineage_sha):
+        policy = self.policy
+        if not (policy.blocked_lineages or any(
+                row.get('kind') == 'approved_repair_run' for row in policy.recovery_authorizations)):
+            return
+        expected = {row['lineage_sha256']
+                    for row in (*policy.blocked_lineages, *policy.recovery_authorizations)
+                    if row.get('source_sha256') == source_sha}
+        if not source_sha or (expected and lineage_sha not in expected):
+            raise SourceLineageMismatch()
 
     def validate_image_plan(self, plan_sha, required_images):
         if not self.policy.enabled:
@@ -266,8 +419,27 @@ class AuditedTransport(httpx.BaseTransport):
         if request.method!='POST'or request.url.scheme!='https'or request.url.host!='api.openai.com'or request.url.port not in(None,443):raise ValueError('unapproved inference destination')
         raw=request.read()
         if len(raw)>64*1024*1024:raise ValueError('request evidence capacity')
-        payload=json.loads(raw);path=request.url.path;kind='text'if path=='/v1/responses'else'image'if path in{'/v1/images/generations','/v1/images/edits'}else None
-        if kind is None or payload.get('model')!=('gpt-6.1-sol'if kind=='text'else'gpt-image-2.6-flare'):raise ValueError('unapproved inference endpoint/model')
+        payload = json.loads(raw)
+        from .client import IMAGE_MODELS
+        endpoint = {
+            '/v1/responses': ('text', 'gpt-6.1-sol'),
+            '/v1/decisions': ('text', 'gpt-6-luna'),
+            '/v1/images/generations': ('image', IMAGE_MODELS),
+            '/v1/images/edits': ('image', IMAGE_MODELS),
+        }.get(request.url.path)
+        if (endpoint is None or not isinstance(payload.get('model'), str)
+                or payload['model'] not in (endpoint[1] if isinstance(endpoint[1], frozenset) else (endpoint[1],))):
+            raise ValueError('unapproved inference endpoint/model')
+        kind = endpoint[0]
+        work = request.headers.pop('x-patent-work-context', '').split('/')
+        if work != [''] and (len(work) != 5 or not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', work[0])
+                             or not all(re.fullmatch(r'[a-f0-9]{64}', work[i]) for i in (1, 3))
+                             or not re.fullmatch(r'work_[a-f0-9]{64}', work[2])
+                             or not re.fullmatch(
+                                 r'(?:plan_|figure_route_|figure_vote_|image_route_|agent_prepare_|material_|render_)[a-f0-9]{64}',
+                                 work[4])
+                             or (work[4].startswith(('figure_vote_', 'material_')) and request.url.path != '/v1/decisions')):
+            raise ValueError('invalid internal task context')
         plan_sha=request.headers.get('x-patent-plan-sha256');estimate=None;estimate_sha=None
         required_images = 1
         if kind=='image':
@@ -283,12 +455,8 @@ class AuditedTransport(httpx.BaseTransport):
         if 'x-patent-plan-remaining' in request.headers:del request.headers['x-patent-plan-remaining']
         source_sha=request.headers.get('x-patent-source-sha256');lineage_sha=request.headers.get('x-patent-lineage-sha256')
         if any(v is not None and not re.fullmatch(r'[a-f0-9]{64}',v) for v in [source_sha,lineage_sha]) or bool(source_sha)!=bool(lineage_sha):raise ValueError('private lineage context invalid')
-        repair_scope=any(a.get('kind')=='approved_repair_run'for a in p.recovery_authorizations)
-        if kind=='image'and(repair_scope or p.blocked_lineages):
-            if not source_sha:raise ValueError('repair scope requires bound source/lineage')
-            expected=[b['lineage_sha256']for b in p.blocked_lineages if b['source_sha256']==source_sha]
-            expected += [a['lineage_sha256']for a in p.recovery_authorizations if a.get('source_sha256')==source_sha]
-            if expected and lineage_sha not in expected:raise ValueError('original source lineage cannot be replaced')
+        if kind=='image':
+            self.validate_image_lineage(source_sha, lineage_sha)
         recovery_id=request.headers.get('x-patent-recovery-id');recovery_evidence=request.headers.get('x-patent-recovery-evidence-sha256')
         for name in ['x-patent-source-sha256','x-patent-lineage-sha256','x-patent-recovery-id','x-patent-recovery-evidence-sha256']:
             if name in request.headers:del request.headers[name]
@@ -305,7 +473,10 @@ class AuditedTransport(httpx.BaseTransport):
                     raise ValueError('repair candidate/source/lineage scope mismatch')
                 if c.execute('select 1 from recovery_uses where id=?',(recovery_id,)).fetchone():
                     raise ValueError('recovery authorization already consumed')
-            if c.execute('select 1 from calls where run=? and slot=?',(p.run_id,slot)).fetchone():raise ValueError('request already dispatched; automatic retry forbidden')
+            if c.execute('select 1 from calls where run=? and slot=?', (p.run_id, slot)).fetchone():
+                if kind == 'image':
+                    raise DuplicateImageRequest()
+                raise ValueError('request already dispatched; automatic retry forbidden')
             blocked=c.execute("select c.run,c.slot,c.state from calls c left join request_slots s on c.run=s.run and c.slot=s.slot where coalesce(s.request_slot,c.slot)=? and c.state in ('dispatching','result_unknown','provider_rejected') order by c.started desc limit 1",(request_slot,)).fetchone()
             lineage_block=None
             if kind=='image' and lineage_sha:
@@ -341,6 +512,9 @@ class AuditedTransport(httpx.BaseTransport):
             (folder/'intent.json').write_text(json.dumps({'url':str(request.url),'kind':kind,'run_id':p.run_id,'policy_sha256':p.sha256,'request_sha256':hashlib.sha256(raw).hexdigest(),'automatic_retries':0,'recovery_authorization_id':recovery['authorization_id']if recovery else None,'previous_operation_id':recovery['previous_operation_id']if recovery else None,'source_sha256':source_sha,'lineage_sha256':lineage_sha},indent=2))
             c.execute('insert into calls values(?,?,?,?,?,?,?,?)',(p.run_id,slot,kind,'dispatching',None,None,None,time.time()))
             c.execute('insert into request_slots values(?,?,?)',(p.run_id,slot,request_slot))
+            if work != ['']:
+                c.execute('INSERT INTO work_audit(run,slot,app,build,task,owner,operation) VALUES(?,?,?,?,?,?,?)',
+                          (p.run_id, slot, *work))
             if lineage_sha:c.execute('insert into lineage_calls values(?,?,?,?)',(p.run_id,slot,lineage_sha,source_sha))
             if recovery:c.execute('insert into recovery_uses values(?,?,?,?)',(recovery['authorization_id'],recovery['previous_operation_id'],p.run_id,slot))
             if estimate is not None:c.execute('insert into plan_calls values(?,?,?)',(p.run_id,slot,plan_sha))
@@ -349,7 +523,11 @@ class AuditedTransport(httpx.BaseTransport):
         try:
             transport=self.inner or httpx.HTTPTransport(retries=0,proxy=os.environ.get('HTTPS_PROXY')or os.environ.get('https_proxy'))
             response=transport.handle_request(request);headers={k:v for k,v in response.headers.items()if k.lower()in{'x-request-id','content-type','date','retry-after'}}
-            (folder/'headers.json').write_text(json.dumps({'status':response.status_code,'headers':headers},indent=2))
+            encoded_headers = json.dumps({'status':response.status_code,'headers':headers},indent=2).encode()
+            with (folder/'headers.json').open('xb') as evidence:
+                evidence.write(encoded_headers)
+                evidence.flush()
+                os.fsync(evidence.fileno())
             chunks=[];total=0
             with(folder/'response.bin').open('xb')as f:
                 for chunk in ([response.content]if response.is_stream_consumed else response.iter_raw()):
@@ -358,13 +536,27 @@ class AuditedTransport(httpx.BaseTransport):
                     chunks.append(chunk)
                 os.fsync(f.fileno())
             body=b''.join(chunks)
+            if work != ['']:
+                for target in (folder, folder.parent):
+                    descriptor = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
             try:usage=json.loads(body).get('usage')
             except (ValueError,AttributeError):usage=None
             state='response_saved'if response.status_code==200 else'provider_rejected'if 400<=response.status_code<500 and response.status_code!=408 else'result_unknown'
-            with sqlite3.connect(self.db)as c:c.execute('update calls set state=?,status=?,request_id=?,usage=?where run=? and slot=?',(state,response.status_code,response.headers.get('x-request-id'),json.dumps(usage),p.run_id,slot))
+            with sqlite3.connect(self.db)as c:
+                c.execute('update calls set state=?,status=?,request_id=?,usage=?where run=? and slot=?',
+                          (state,response.status_code,response.headers.get('x-request-id'),json.dumps(usage),p.run_id,slot))
+                if work != ['']:
+                    c.execute('UPDATE work_audit SET response_sha256=?,headers_sha256=? WHERE run=? AND slot=?',
+                              (hashlib.sha256(body).hexdigest(), hashlib.sha256(encoded_headers).hexdigest(), p.run_id, slot))
             return httpx.Response(response.status_code,headers=response.headers,content=body,request=request)
         except BaseException as error:
-            with sqlite3.connect(self.db)as c:c.execute('update calls set state=?where run=? and slot=?',('result_unknown',p.run_id,slot))
+            with sqlite3.connect(self.db)as c:
+                c.execute("update calls set state='result_unknown' where run=? and slot=? and state='dispatching'",
+                          (p.run_id,slot))
             if isinstance(error, ImageDispatchNotStarted):
                 raise DrawingError('result_unknown', '传输申领后响应未知，请核对原始记录。') from error
             raise

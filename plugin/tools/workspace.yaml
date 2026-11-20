@@ -18,7 +18,7 @@ parameters:
   label:
     en_US: Action
     zh_Hans: 操作
-  llm_description: One of receive, stage, step, package, preview, preflight, review_status; bound by workflow.
+  llm_description: Workflow action. Durable execution uses admit_work, enqueue_work and inspect_work.
   human_description:
     en_US: Action
     zh_Hans: 操作
@@ -67,6 +67,12 @@ parameters:
   human_description:
     en_US: Materials
     zh_Hans: 技术材料正文
+- name: source_mode
+  type: string
+  form: llm
+  label: {en_US: Source mode, zh_Hans: 来源模式}
+  llm_description: Set claims_only or mixed_materials only in the corresponding durable Chatflow.
+  human_description: {en_US: Source mode, zh_Hans: 来源模式}
 - name: files
   type: files
   required: false
@@ -90,6 +96,53 @@ parameters:
   human_description:
     en_US: Reviewed plan JSON
     zh_Hans: 审阅图单JSON
+- name: figure_routing_json
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Bound figure instructions
+    zh_Hans: 图型判断与制图指令
+  llm_description: Bind the Chatflow instruction merge output. The plugin checks the private decision receipt.
+  human_description:
+    en_US: Source-bound figure routing
+    zh_Hans: 与交底和规划指令绑定的图型判断
+- name: scope
+  type: string
+  form: llm
+  label: {en_US: Complex view scope, zh_Hans: 复杂图范围}
+  llm_description: Bound workflow reference, never inferred.
+  human_description: {en_US: Workflow scope reference, zh_Hans: 工作流绑定范围}
+- name: preparation_json
+  type: string
+  form: llm
+  label: {en_US: Bound preparation result, zh_Hans: 复杂图准备回执}
+  llm_description: Return of the Agent preparation node.
+  human_description: {en_US: Agent preparation receipt, zh_Hans: Agent 准备回执}
+- name: require_image_route
+  type: string
+  form: llm
+  label: {en_US: Confirmed image route, zh_Hans: 已核图像路线}
+  llm_description: Workflow-only compatibility flag.
+  human_description: {en_US: Workflow route confirmation, zh_Hans: 工作流路线确认}
+- name: durable_work
+  type: string
+  form: llm
+  label: {en_US: Isolated durable execution, zh_Hans: 持久任务入口}
+  llm_description: Fixed by the isolated workflow.
+  human_description: {en_US: Isolated workflow mode, zh_Hans: 隔离工作流模式}
+- name: work_kind
+  type: string
+  form: llm
+  label: {en_US: Task kind, zh_Hans: 任务类型}
+  llm_description: Workflow-bound execution kind.
+  human_description: {en_US: Workflow-bound task kind, zh_Hans: 工作流任务类型}
+- name: task_id
+  type: string
+  form: llm
+  label: {en_US: Durable task receipt, zh_Hans: 持久任务标识}
+  llm_description: Task identifier from an earlier durable receipt.
+  human_description: {en_US: Saved durable task, zh_Hans: 已保存任务}
 - name: image_budget
   type: number
   required: false
@@ -136,6 +189,39 @@ parameters:
   human_description:
     en_US: Application stage
     zh_Hans: 申请阶段
+- name: expected_revision
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Expected intake revision
+    zh_Hans: 采集修订号
+  llm_description: Bind the previously returned intake_revision. Stale writes are rejected.
+  human_description:
+    en_US: Expected intake revision
+    zh_Hans: 上一轮采集修订号
+- name: expected_work_identity
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: Expected drawing plan identity
+    zh_Hans: 待执行图单身份
+  llm_description: Use the work_identity returned by receive for the current workflow run.
+  human_description:
+    en_US: Current drawing plan and confirmation identity
+    zh_Hans: 当前图单及确认范围的校验值
+- name: operation_id
+  type: string
+  required: false
+  form: llm
+  label:
+    en_US: System operation ID
+    zh_Hans: 系统操作ID
+  llm_description: Stable system request identifier for replay protection, never inferred from material.
+  human_description:
+    en_US: System operation ID
+    zh_Hans: 本次系统操作标识
 extra:
   python:
     source: tools/workspace.py

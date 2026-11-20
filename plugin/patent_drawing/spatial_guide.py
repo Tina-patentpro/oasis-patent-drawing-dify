@@ -106,3 +106,37 @@ def default_layout(geometry):
  slots=[[180,110,1360,580],[170,430,1400,930]]
  return {'canvas':[1536,1024],'coordinate_space':'illustrative_pixels','instances':rows,
          'plates':[{'part_id':p['part_id'],'box':slots[i],'display':'outline_only'}for i,p in enumerate(plates)]}
+
+
+def point_in_box(point, box):
+    return (isinstance(point, (tuple, list)) and len(point) == 2
+            and all(type(value) is int for value in point)
+            and isinstance(box, (tuple, list)) and len(box) == 4
+            and box[0] <= point[0] < box[2] and box[1] <= point[1] < box[3])
+
+
+def add_detail_locators(result, markers):
+    """Write the same reviewed local index into the raster and the SVG."""
+    from xml.etree import ElementTree as ET
+    from .annotations import regular_font
+
+    with Image.open(io.BytesIO(result['png'])) as source:
+        image = source.convert('RGB')
+    root = ET.fromstring(result['svg'])
+    draw = ImageDraw.Draw(image)
+    face = regular_font(25)
+    for locator, (x, y) in markers.items():
+        width = math.ceil(face.getlength(locator)) + 10
+        region = [x, y, x + width, y + 33]
+        if not box_valid(region, *image.size):
+            raise ValueError('local locator outside drawing')
+        if image.crop(region).getextrema() != ((255, 255), (255, 255), (255, 255)):
+            raise ValueError('local locator overlaps visible drawing')
+        draw.text((x + 4, y + 3), locator, fill='black', font=face, anchor='lt')
+        mark = ET.SubElement(root, '{http://www.w3.org/2000/svg}text',
+                            {'x': str(x + 4), 'y': str(y + 25), 'font-size': '25',
+                             'fill': 'black', 'data-detail-locator': locator})
+        mark.text = locator
+    out = io.BytesIO()
+    image.save(out, format='PNG')
+    return {**result, 'png': out.getvalue(), 'svg': ET.tostring(root, encoding='utf-8')}

@@ -1,11 +1,32 @@
 """One bounded PDFium process per ingestion; no PDFium threading or web fetch."""
 import base64
+from contextlib import closing
 import ctypes
 import io
 import json
 import math
 import re
 import sys
+
+
+def extract_image(data, page_number, object_number):
+    """Decode one identified PDF image at its intrinsic pixel dimensions."""
+    import pypdfium2 as pdfium
+    with pdfium.PdfDocument(data) as document:
+        with closing(document[page_number - 1]) as page:
+            image = next((obj for index, obj in enumerate(page.get_objects(), 1) if index == object_number), None)
+            if image is None or image.type != 3:
+                raise ValueError('PDF image object is unavailable')
+            width, height = image.get_px_size()
+            if not 1 <= width * height <= 8_000_000:
+                raise ValueError('PDF image pixel capacity exceeded')
+            with closing(image.get_bitmap(render=False)) as bitmap:
+                if (bitmap.width, bitmap.height) != (width, height):
+                    raise ValueError('PDF image object was resampled during extraction')
+                rgb = bitmap.to_pil().convert('RGB')
+                out = io.BytesIO()
+                rgb.save(out, format='PNG')
+                return out.getvalue()
 
 
 def extract(data):
@@ -53,7 +74,7 @@ def extract(data):
                         vectors.append([left,bottom,right,top]);continue
                     nontext_seen = True
                     if len(graphics) >= 256: raise ValueError('PDF graphic capacity exceeded')
-                    graphics.append({'kind':'image','bbox_pdf':[left,bottom,right,top],
+                    graphics.append({'kind':'image','object_number':count,'bbox_pdf':[left,bottom,right,top],
                         'bbox':[max(0,int(left*scale)),max(0,int((h-top)*scale)),min(math.ceil(w*scale),math.ceil(right*scale)),min(math.ceil(h*scale),math.ceil((h-bottom)*scale))]})
                 if vectors:
                     left=min(v[0]for v in vectors);bottom=min(v[1]for v in vectors);right=max(v[2]for v in vectors);top=max(v[3]for v in vectors)
@@ -86,7 +107,12 @@ if __name__ == '__main__':
             resource.setrlimit(resource.RLIMIT_AS, (500 * 1024 * 1024,) * 2)
         raw = sys.stdin.buffer.read(16 * 1024 * 1024 + 1)
         if len(raw) > 16 * 1024 * 1024: raise ValueError('PDF input capacity exceeded')
-        print(json.dumps({'pages': extract(raw)}, ensure_ascii=False, allow_nan=False))
+        if len(sys.argv) == 3:
+            sys.stdout.buffer.write(extract_image(raw, int(sys.argv[1]), int(sys.argv[2])))
+        elif len(sys.argv) == 1:
+            print(json.dumps({'pages': extract(raw)}, ensure_ascii=False, allow_nan=False))
+        else:
+            raise ValueError('invalid PDF extraction arguments')
     except Exception:
-        print(json.dumps({'error': 'PDF解析失败、加密或资源超限；原件未截断，未调用模型'}))
+        print(json.dumps({'error': 'PDF解析失败、加密或资源超限；原件未截断，未调用模型'}), file=sys.stderr)
         sys.exit(1)

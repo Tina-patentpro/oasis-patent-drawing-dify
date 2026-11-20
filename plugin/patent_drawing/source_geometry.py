@@ -6,6 +6,14 @@ from .source_contract import validate_facts
 CONTRACT='source-geometry-036-r1'
 
 
+def source_region_basis(region, page):
+ selected = region.get('selected_object')
+ if selected:
+  return selected['artifact']['sha256'], tuple(selected['dimensions'])
+ x1, y1, x2, y2 = region['bbox']
+ return (page.get('image') or {}).get('sha256'), (x2 - x1, y2 - y1)
+
+
 def context(bundle,plan):
  source=digest([x['sha256']for x in bundle['sources']])
  if source!=plan['source_sha256']:raise ValueError('source geometry source identity differs')
@@ -19,14 +27,16 @@ def validate_assets(assets,bundle,plan):
   required={'part_id','source_region_id','source_image_sha256','visible_segments','outline_complete','properties','cardinality','evidence'}
   if not isinstance(a,dict)or set(a)!=required or a['part_id']not in parts or a['part_id']in seen:raise ValueError('source asset identity/schema invalid')
   seen.add(a['part_id']);region=regions.get(a['source_region_id']);page=pages.get(region['page_id'])if region else None
-  if not page or not page.get('image')or a['source_image_sha256']!=page['image']['sha256']:raise ValueError('source asset image/region identity differs')
+  if not page:raise ValueError('source asset image/region identity differs')
+  image_sha, (width, height) = source_region_basis(region, page)
+  if not image_sha or a['source_image_sha256']!=image_sha:raise ValueError('source asset image/region identity differs')
   props=a['properties']
   if (not isinstance(props,dict)or set(props)!={'external_form','internal_parts','allowed_exterior_details'}or props['external_form']not in {'closed_sleeve','source_contour','open_spring','unspecified'}or any(not isinstance(props[k],list)or len(props[k])>40 or any(not isinstance(v,str)or not 1<=len(v)<=160 for v in props[k])for k in ['internal_parts','allowed_exterior_details'])):raise ValueError('unsupported exterior property; no invented interfaces/dimensions')
   c=a['cardinality']
   if not isinstance(c,dict)or len(c)!=1 or not set(c)<={'exact','minimum'}or any(type(v)is not int or not 1<=v<=24 for v in c.values()):raise ValueError('source cardinality invalid')
   f={'id':'evidence','status':'confirmed','text':'source exterior','evidence':a['evidence']}
   if any(x['verdict']=='FAIL'for x in validate_facts(bundle,[f])):raise ValueError('source exterior evidence missing')
-  paths=a['visible_segments'];box=region['bbox'];width,height=box[2]-box[0],box[3]-box[1]
+  paths=a['visible_segments']
   if not isinstance(paths,list)or not 1<=len(paths)<=64 or type(a['outline_complete'])is not bool:raise ValueError('source contour invalid')
   for path in paths:
    if not isinstance(path,list)or not 2<=len(path)<=512:raise ValueError('source contour capacity')
@@ -125,7 +135,8 @@ def validate_assembly_registration(registration, assets, bundle, plan):
  if not isinstance(supports,dict) or len(supports)!=4:
   raise ValueError('assembly registration requires four distinct supports')
  facts={f['id']:f for f in plan['facts'] if f.get('status')=='confirmed'}
- width,height=region['bbox'][2]-region['bbox'][0],region['bbox'][3]-region['bbox'][1]
+ page=next(p for p in bundle['pages'] if p['id']==region['page_id'])
+ _, (width, height)=source_region_basis(region, page)
  seen=set()
  relation_only=set()
  for ident,sides in supports.items():

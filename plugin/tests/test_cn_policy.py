@@ -69,3 +69,30 @@ def test_post_filing_addition_requires_original_filed_support():
     result = policy().check_policy({'patent_type': 'invention', 'application_stage': 'filed',
         'technical_types': ['mechanical'], 'views': [{'type': 'section', 'new_feature': True}]})
     assert any(x['rule'] == 'CN-NO-ADDED-MATTER' and x['verdict'] == 'FAIL' for x in result)
+
+
+def test_domain_obligations_follow_source_relations_without_fabricating_measurements():
+    from patent_drawing.cn_policy import domain_drawing_obligations
+
+    package = {'pages': [{'id': 'package-1', 'text': '再分布结构含导电图案和绝缘层。导电柱侧部设置中介绝缘层。'
+                                                   '封装基板与中介结构之间可存在底部填充。'}]}
+    obligations = domain_drawing_obligations(package, ['semiconductor'])
+    assert {item['id'] for item in obligations} == {'rdl_conductor_and_insulator', 'distinct_underfill_interface'}
+    assert all(item['page_id'] == 'package-1' for item in obligations)
+    film = {'pages': [{'id': 'film-1', 'text': '鳞片长轴沿膜面，彼此接触。热量面内扩散，与厚度方向传热不同。'}]}
+    obligations = domain_drawing_obligations(film, ['chemical_material'])
+    assert [item['id'] for item in obligations] == ['in_plane_heat_network']
+    assert '定性' in obligations[0]['requirement']
+    assert domain_drawing_obligations({'pages': [{'id': 'p1', 'text': '合金成分及其性能。'}]},
+                                      ['chemical_material']) == []
+
+
+@pytest.mark.parametrize(('text', 'expected'), [
+    ('对铁系喷镀覆膜进行镜面化后，使用珩磨磨石控制塑性流动。', ['manufacturing_process']),
+    ('采用以铁为主的非调质钢，控制成分范围及切削性。', ['chemical_material']),
+    ('依存网络编码器组合两路语义表示以生成训练样本。', ['computer_method']),
+])
+def test_suggest_types_uses_domain_specific_source_language(text, expected):
+    from patent_drawing.cn_policy import suggest_types
+
+    assert suggest_types(text) == expected

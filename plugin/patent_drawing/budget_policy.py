@@ -2,7 +2,7 @@
 def estimate_dispatches(plan,current_records=None,base_specs=None):
     records=current_records or{};count=0;required=[]
     for view in plan.get('views',[]):
-        if view['engine']!='image':continue
+        if view['engine'] != 'image' or view.get('archived_image_sha256'): continue
         prior=records.get(view['id'])
         if prior and base_specs and prior.get('base_spec_sha256')==base_specs.get(view['id']):continue
         count+=1;required.append(view['id'])

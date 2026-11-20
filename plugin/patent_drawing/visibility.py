@@ -3,9 +3,20 @@ import datetime
 import re
 from .operation_store import digest
 from .source_contract import validate_facts
-from .spatial_brief import requirements
+from .spatial_brief import MATERIAL_HEAT_PATH, MATERIAL_THICKNESS, PANEL_BEAM_ORIGIN, requirements
 
 ACTUAL_CONTRACT = 'visibility-039-r5'
+BEAM_CONTRACT = 'visibility-037-beam'
+BEAM_TRACE_CONTRACT = 'visibility-038-beam'
+BEAM_FRONT_CONTRACT = 'visibility-040-beam'
+BEAM_CLEAN_CONTRACT = 'visibility-041-beam'
+BEAM_OUTWARD_CONTRACT = 'visibility-042-beam'
+BEAM_ROOTED_CONTRACT = 'visibility-043-beam'
+BEAM_OUTWARD_CONTRACTS = {BEAM_OUTWARD_CONTRACT, BEAM_ROOTED_CONTRACT}
+BEAM_CLEAN_CONTRACTS = {BEAM_CLEAN_CONTRACT, *BEAM_OUTWARD_CONTRACTS}
+BEAM_CONTRACTS = {BEAM_CONTRACT, BEAM_TRACE_CONTRACT, BEAM_FRONT_CONTRACT, *BEAM_CLEAN_CONTRACTS}
+MATERIAL_HEAT_CONTRACT = 'visibility-material-heat-v1'
+RECHECK_IMAGE_CONTRACTS = {ACTUAL_CONTRACT, MATERIAL_HEAT_CONTRACT} | BEAM_CONTRACTS
 ACTUAL_ROLES = {
     'channel-contour': ['wall_boundary', 'channel_run', 'independent_wire'],
     'channel-partition-solids': ['partition_face', 'partition_extent', 'independent_wire'],
@@ -58,6 +69,10 @@ def build_visibility_contract(bundle: dict, plan: dict, view: dict) -> dict:
                          {'feature_id':'rib-insertion-contact','requirement':'在实际入孔段看清销上可变形肋与镀覆孔壁接触；仅同轴或孔外凸起不能通过。'},
                          {'feature_id':'conductive-path','requirement':'可理解母排—一体销—PCB镀覆接地孔的连续导电关系，不把虚空或独立套筒当作镀覆孔。'}]
     version = 'visibility-038-r1' if expression else 'visibility-035-r1'
+    if any(f['feature_id'] == PANEL_BEAM_ORIGIN for f in features):
+        version = BEAM_ROOTED_CONTRACT
+    if any(f['feature_id'] == MATERIAL_HEAT_PATH for f in features):
+        version = MATERIAL_HEAT_CONTRACT
     if expression and (any(f['feature_id'] in ACTUAL_ROLES or f['feature_id'].startswith('spring-support-')
                            for f in features)
                        or busbar_scene):
@@ -85,6 +100,8 @@ def build_visibility_contract(bundle: dict, plan: dict, view: dict) -> dict:
                 f['requires_partition_traces'] = True
             if busbar_scene and ident == 'pin-hole-fit':
                 f['requires_insertion_zone'] = True
+    if version == MATERIAL_HEAT_CONTRACT:
+        context['material_axis_labels'] = True
     return {'contract': version, 'view_id': view['id'], 'features': features,
             **context,
             'drawability': 'needs_source' if support_goal and not supported else 'ready_for_candidate',
@@ -93,12 +110,16 @@ def build_visibility_contract(bundle: dict, plan: dict, view: dict) -> dict:
 
 def check_visibility_review(review: dict, base_sha256: str, spec_sha256: str, contract: dict,
                             *, guide_sha256=None, request_id=None, base_image_size=None,
-                            parent_binding=None) -> list[dict]:
+                            parent_binding=None, base_image=None) -> list[dict]:
     def fail(message): return [{'rule': 'ACTUAL-VISIBILITY-REVIEW', 'verdict': 'FAIL', 'message': message}]
     if (review.get('view_id') != contract['view_id'] or review.get('base_sha256') != base_sha256
             or review.get('spec_sha256') != spec_sha256 or review.get('contract_sha256') != digest(contract)):
         return fail('visual review base/spec/contract identity differs')
     actual_contract = contract.get('contract') == ACTUAL_CONTRACT
+    material_contract = contract.get('contract') == MATERIAL_HEAT_CONTRACT
+    if material_contract and (not isinstance(request_id, str) or not request_id
+                              or review.get('request_id') != request_id):
+        return fail('actual material review request identity differs')
     if contract.get('contract') in {'visibility-038-r1', ACTUAL_CONTRACT}:
         if (not isinstance(guide_sha256,str) or not re.fullmatch(r'[a-f0-9]{64}',guide_sha256)
                 or review.get('guide_sha256') != guide_sha256
@@ -148,6 +169,18 @@ def check_visibility_review(review: dict, base_sha256: str, spec_sha256: str, co
                 if row.get('visible_object') != 'spring_support_body_and_interfaces':
                     return fail('spring body/interfaces must be identified; dots or fasteners are insufficient')
                 spring_regions.append(region)
+            if row['feature_id'] == PANEL_BEAM_ORIGIN:
+                version = contract['contract']
+                error = panel_beam_issue(
+                    row, base_image_size, base_image,
+                    allow_midpoints=version != BEAM_CONTRACT and version in BEAM_CONTRACTS,
+                    require_full_panel=version == BEAM_FRONT_CONTRACT or version in BEAM_CLEAN_CONTRACTS,
+                    require_clean_base=version in BEAM_CLEAN_CONTRACTS,
+                    require_outward=version in BEAM_OUTWARD_CONTRACTS,
+                    require_connected_root=version == BEAM_ROOTED_CONTRACT,
+                )
+                if error:
+                    return fail(PANEL_BEAM_ORIGIN + ': ' + error)
             if actual_contract:
                 feature = required[row['feature_id']]
                 roles = feature.get('observation_roles', [])
@@ -183,6 +216,11 @@ def check_visibility_review(review: dict, base_sha256: str, spec_sha256: str, co
                     if boxes & spring_observations:
                         return fail('each support needs its own body and interface observations')
                     spring_observations.update(boxes)
+    if material_contract:
+        from .material_heat import material_heat_issue
+        issue = material_heat_issue(rows, base_image_size, base_image)
+        if issue:
+            return fail(issue[0] + ': ' + issue[1])
     if len({tuple(r) for r in spring_regions}) != len(spring_regions):
         return fail('each support instance needs a distinct evidence region')
     if insertion_zone is not None and rib_contact is not None and not region_within(rib_contact, insertion_zone):
@@ -194,6 +232,264 @@ def region_within(region, container):
     return (isinstance(region, list) and len(region) == 4
             and all(type(value) is int for value in region)
             and all(container[i] <= region[i] < region[i + 2] <= container[i + 2] for i in (0, 1)))
+
+
+def panel_beam_issue(row, size, image, *, allow_midpoints=False, require_full_panel=False,
+                     require_clean_base=False, require_outward=False, require_connected_root=False):
+    """Check pixel-space traces of the drawn convention, never physical angles."""
+    region = row['region']
+    geometry = row.get('beam_geometry')
+    fields = {'panel', 'origin', 'boundaries', 'beams'}
+    optional = {'boundary_midpoints'} if allow_midpoints else set()
+    if require_clean_base:
+        optional.add('range_cap_midpoint')
+    if (not size or not region_within(region, [0, 0, *size]) or not isinstance(geometry, dict)
+            or not fields <= geometry.keys() <= fields | optional):
+        return 'actual panel, origin, boundaries and beam trace evidence required'
+    panel, origin = geometry['panel'], geometry['origin']
+    boundaries, beams = geometry['boundaries'], geometry['beams']
+
+    def in_region(point):
+        return (isinstance(point, list) and len(point) == 2
+                and all(type(v) is int and region[i] <= v < region[i+2] for i, v in enumerate(point)))
+
+    if (not region_within(panel, region) or not in_region(origin)
+            or not isinstance(boundaries, list) or len(boundaries) != 2 or not all(map(in_region, boundaries))
+            or not isinstance(beams, list) or len(beams) != 2
+            or any(not isinstance(beam, dict) or set(beam) != {'tip', 'head'} or not in_region(beam['tip'])
+                   or not isinstance(beam['head'], list) or len(beam['head']) != 2
+                   or not all(map(in_region, beam['head'])) for beam in beams)):
+        return 'beam trace points must be distinct and bounded by the actual-base region'
+    tolerance = max(2, min(8, round(min(size) / 240)))
+    if (not all(panel[i]-tolerance <= origin[i] <= panel[i+2]+tolerance for i in (0, 1))
+            or min(abs(origin[i % 2]-edge) for i, edge in enumerate(panel)) > tolerance):
+        return 'the shared reference point must lie on the observed panel edge'
+
+    def delta(a, b):
+        return (b[0]-a[0], b[1]-a[1])
+
+    def cross(a, b):
+        return a[0]*b[1] - a[1]*b[0]
+
+    def dot(a, b):
+        return a[0]*b[0] + a[1]*b[1]
+
+    tips = [beam['tip'] for beam in beams]
+    edge_a, edge_b = (delta(origin, point) for point in boundaries)
+    rays = [delta(origin, tip) for tip in tips]
+    turn = cross(edge_a, edge_b)
+    if (not turn or cross(*rays)**2 < (2*tolerance)**2 * max(dot(ray, ray) for ray in rays)
+            or any(dot(ray, ray) < (6*tolerance)**2 for ray in [edge_a, edge_b, *rays])
+            or any(cross(edge_a, ray)*turn <= 0 or cross(ray, edge_b)*turn <= 0 for ray in rays)):
+        return 'two distinct beam directions must lie strictly inside the two range boundaries'
+    for ray, beam in zip(rays, beams):
+        wings = [delta(beam['tip'], point) for point in beam['head']]
+        if (cross(ray, wings[0])*cross(ray, wings[1]) >= 0
+                or any(dot(ray, wing) >= 0 or dot(wing, wing) < (2*tolerance)**2 for wing in wings)):
+            return 'each interior beam needs two actual arrowhead wings pointing back from its tip'
+
+    midpoints = geometry.get('boundary_midpoints', [None, None])
+    if 'boundary_midpoints' in geometry:
+        if not isinstance(midpoints, list) or len(midpoints) != 2 or not all(map(in_region, midpoints)):
+            return 'each observed boundary midpoint must lie inside the actual-base region'
+        middle_rays = [delta(origin, point) for point in midpoints]
+        for limit, middle in zip((edge_a, edge_b), middle_rays):
+            length_sq = dot(limit, limit)
+            progress = dot(limit, middle)
+            if (not length_sq <= 3*progress <= 2*length_sq
+                    or 10000*cross(limit, middle)**2 > 9*length_sq**2):
+                return 'a boundary midpoint must be near the middle and within the slight-curve allowance'
+        if any(cross(middle_rays[0], ray)*turn <= 0 or cross(ray, middle_rays[1])*turn <= 0
+               for ray in rays):
+            return 'observed boundary paths must remain outside both interior beam directions'
+
+    cap = []
+    if 'range_cap_midpoint' in geometry:
+        a, b = boundaries
+        middle = geometry['range_cap_midpoint']
+        if not in_region(middle):
+            return 'the optional range cap must have an actual-base midpoint'
+        chord = delta(a, b)
+        chord_sq = dot(chord, chord)
+        progress = dot(chord, delta(a, middle))
+        bow = cross(chord, delta(a, middle))
+        if (not chord_sq <= 3*progress <= 2*chord_sq
+                or bow*cross(chord, delta(a, origin)) > 0
+                or 25*abs(bow) > 4*chord_sq):
+            return 'the optional range cap must connect the boundary tips with a shallow outward bow'
+        control = [2*middle[i] - (a[i]+b[i])/2 for i in (0, 1)]
+        cap = [tuple(round((1-t)**2*a[i] + 2*t*(1-t)*control[i] + t*t*b[i])
+                     for i in (0, 1)) for t in (j/32 for j in range(33))]
+
+    paths = [[origin, midpoint, endpoint] if midpoint is not None else [origin, endpoint]
+             for endpoint, midpoint in zip([*boundaries, *tips], [*midpoints, None, None])]
+    if require_outward:
+        wings = [point for beam in beams for point in beam['head']]
+        outward_points = [point for path in paths for point in path[1:]] + wings + cap
+        side = next(((i % 2, sign) for i, (edge, sign) in enumerate(zip(panel, (-1, -1, 1, 1)))
+                     if abs(origin[i % 2] - edge) <= tolerance
+                     and all(sign * (p[i % 2] - edge) > tolerance for p in outward_points)), None)
+        if side is None:
+            return 'the boundaries and arrows must open outside the same panel edge'
+
+    if image is None:
+        return None
+    gray = image.convert('L')
+
+    def ink(a, b, t):
+        x, y = [round(a[i]+t*(b[i]-a[i])) for i in (0, 1)]
+        box = (max(0, x-tolerance), max(0, y-tolerance),
+               min(size[0], x+tolerance+1), min(size[1], y+tolerance+1))
+        return gray.crop(box).getextrema()[0] < 128
+
+    def ink_along_segment(a, b):
+        span = max(map(abs, delta(a, b)))
+        steps = max(1, (span+tolerance-1)//tolerance)
+        return all(ink(a, b, i/steps) for i in range(steps+1))
+
+    left, top, right, bottom = panel
+    corners = [(left, top), (right, top), (right, bottom), (left, bottom)]
+    for a, b in zip(corners, corners[1:] + corners[:1]):
+        supported = ink_along_segment(a, b) if require_full_panel else all(ink(a, b, t) for t in (.2, .5, .8))
+        if not supported:
+            return 'observed panel edge is not visible as a continuous rectangle on the actual base'
+
+    trace_error = 'boundary and beam strokes do not meet at the recorded panel reference point'
+    strokes = [corners + corners[:1]]
+    for points in paths:
+        if allow_midpoints:
+            if not all(ink_along_segment(a, b) for a, b in zip(points, points[1:])):
+                return trace_error
+            strokes.append(points)
+        else:
+            endpoint = points[-1]
+            checks = [ink(origin, endpoint, t) for t in (0, .06, .12, .22, .36, .50, .64, .78, .90, .97)]
+            if not all(checks[:3]) or sum(checks) < 9:
+                return trace_error
+    if any(not all(ink(beam['tip'], wing, t) for t in (.3, .6, .9))
+           for beam in beams for wing in beam['head']):
+        return 'claimed arrowhead wings are not visible on the actual base'
+    if cap:
+        if not all(ink_along_segment(a, b) for a, b in zip(cap, cap[1:])):
+            return 'the optional range cap is not continuously visible between the boundary tips'
+        strokes.append(cap)
+    if require_outward:
+        issue = outward_stroke_issue(gray, paths, wings, side, tolerance, require_connected_root)
+        if issue:
+            return issue
+    if require_clean_base and unexpected_beam_ink(gray, strokes, beams, tolerance):
+        return 'unexpected strokes outside the traced panel, range boundaries and beam arrows'
+    return None
+
+
+def outward_stroke_issue(gray, paths, arrow_wings, side, tolerance, require_connected_root):
+    """Check separable ink runs across two cuts through the four traced shafts."""
+    axis, sign = side
+    lateral = 1 - axis
+    origin = paths[0][0][axis]
+    extent = min(sign * (point[axis] - origin)
+                 for point in [*(path[-1] for path in paths), *arrow_wings])
+    pixels = gray.load()
+    separate = 'four independently visible strokes must diverge outside the panel'
+    for index, fraction in enumerate((1/3, 2/3)):
+        distance = round(extent * fraction)
+        if distance <= 2*tolerance:
+            return separate
+        cut = origin + sign*distance
+        expected = []
+        for path in paths:
+            for a, b in zip(path, path[1:]):
+                if sign*a[axis] <= sign*cut <= sign*b[axis] and a[axis] != b[axis]:
+                    position = (cut - a[axis]) / (b[axis] - a[axis])
+                    expected.append(round(a[lateral] + position*(b[lateral] - a[lateral])))
+                    break
+        if len(expected) != len(paths):
+            return separate
+        low = max(0, min(expected) - tolerance)
+        high = min(gray.size[lateral], max(expected) + tolerance + 1)
+        runs = []
+        for coordinate in range(low, high):
+            point = (cut, coordinate) if axis == 0 else (coordinate, cut)
+            if pixels[point] < 128:
+                if runs and coordinate <= runs[-1][-1] + 2:
+                    runs[-1][-1] = coordinate
+                else:
+                    runs.append([coordinate, coordinate])
+        matches = [{i for i, (lo, hi) in enumerate(runs) if lo-tolerance <= point <= hi+tolerance}
+                   for point in expected]
+        if any(len(choices) != 1 for choices in matches) or len(set.union(*matches)) != len(paths):
+            return separate
+        if require_connected_root and index == 0:
+            targets = []
+            for position, choices in zip(expected, matches):
+                lo, hi = runs[next(iter(choices))]
+                candidates = (k for k in range(lo, hi+1)
+                              if pixels[(cut, k) if axis == 0 else (k, cut)] < 128)
+                targets.append(min(candidates, key=lambda k: abs(k-position)))
+            if not ink_connects_to_root(gray, paths[0][0], side, distance, targets, tolerance):
+                return 'four outside strokes must connect to the actual panel root'
+    return None
+
+
+def ink_connects_to_root(gray, origin, side, distance, targets, tolerance):
+    """Follow real dark pixels up to the first cut, before an arc can connect paths."""
+    axis, sign = side
+    lateral = 1 - axis
+    pixels = gray.load()
+
+    def dark(u, v):
+        # A small collar allows an approximate edge coordinate without using the
+        # rest of the panel outline to connect different attachment points.
+        if not -tolerance <= u <= distance or u <= 0 and abs(v) > tolerance:
+            return False
+        a = origin[axis] + sign*u
+        b = origin[lateral] + v
+        if not 0 <= a < gray.size[axis] or not 0 <= b < gray.size[lateral]:
+            return False
+        return pixels[(a, b) if axis == 0 else (b, a)] < 128
+
+    offsets = range(-tolerance, tolerance+1)
+    seed = min(((u, v) for u in offsets for v in offsets if dark(u, v)),
+               key=lambda uv: uv[0]**2 + uv[1]**2, default=None)
+    if seed is None:
+        return False
+    pending = [seed]
+    visited = {seed}
+    missing = {(distance, k-origin[lateral]) for k in targets}
+    neighbors = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
+    while pending and missing:
+        u, v = pending.pop()
+        missing.discard((u, v))
+        for du, dv in neighbors:
+            point = (u+du, v+dv)
+            if point not in visited and dark(*point):
+                visited.add(point)
+                pending.append(point)
+    return not missing
+
+
+def unexpected_beam_ink(gray, strokes, beams, tolerance):
+    from PIL import Image, ImageChops, ImageDraw
+
+    allowance = Image.new('L', gray.size)
+    draw = ImageDraw.Draw(allowance)
+    radius = 3*tolerance
+
+    def corridor(points):
+        points = [tuple(point) for point in points]
+        draw.line(points, fill=255, width=2*radius+1, joint='curve')
+        for x, y in points:
+            draw.ellipse((x-radius, y-radius, x+radius, y+radius), fill=255)
+
+    for points in strokes:
+        corridor(points)
+    for beam in beams:
+        triangle = [tuple(beam['tip']), *map(tuple, beam['head'])]
+        draw.polygon(triangle, fill=255)
+        corridor(triangle + triangle[:1])
+    dark = gray.point([255] * 128 + [0] * 128)
+    outside = ImageChops.subtract(dark, allowance)
+    return outside.histogram()[255] >= 2*tolerance
 
 
 def instance_inventory_issue(entities, expected, size):
@@ -319,16 +615,44 @@ def observation_issue(row, roles, size, scope=None):
     return None
 
 
-def check_record_review(review, record, contract, *, base_image_size=None):
-    return check_visibility_review(review, record['base']['sha256'], record['base_spec_sha256'], contract,
+def check_record_review(review, record, contract, *, base_image_size=None, base_image=None,
+                        require_axis_label_binding=True):
+    if record.get('engine') == 'parent_crop':
+        binding = record.get('reference_parent_binding')
+        if not binding or review.get('parent_crop_binding_sha256') != digest(binding):
+            return [{'rule': 'ACTUAL-VISIBILITY-REVIEW', 'verdict': 'FAIL',
+                     'message': 'local detail review does not match the approved parent crop'}]
+    issues = check_visibility_review(review, record['base']['sha256'], record['base_spec_sha256'], contract,
         guide_sha256=record.get('expression_guide_sha256'), request_id=record.get('request_id'),
         base_image_size=base_image_size or record.get('base_image_size'),
-        parent_binding=(record.get('reference_bundle_receipt') or {}).get('parent_binding'))
+        parent_binding=(record.get('reference_bundle_receipt') or {}).get('parent_binding'),
+        base_image=base_image)
+    if not issues and require_axis_label_binding and contract.get('material_axis_labels'):
+        axis = next(row for row in review['features'] if row['feature_id'] == MATERIAL_THICKNESS)
+        labeling = review.get('material_axis_labeling')
+        if axis['verdict'] == 'PASS':
+            recorded = record.get('material_axis_labeling')
+            valid = isinstance(labeling, dict) and labeling.get('positions') == axis.get('axis_label_positions')
+            if valid and recorded:
+                valid = recorded == labeling and record['png'] == labeling.get('display_png')
+            elif valid:
+                valid = record['png'] == labeling.get('input_png') and bool(labeling.get('display_png'))
+            if not valid:
+                issues.append({'rule': 'ACTUAL-VISIBILITY-REVIEW', 'verdict': 'FAIL',
+                               'message': 'axis label display is not bound to the reviewed figure'})
+        elif labeling:
+            issues.append({'rule': 'ACTUAL-VISIBILITY-REVIEW', 'verdict': 'FAIL',
+                           'message': 'axis label display needs a passing axis observation'})
+    return issues
+
+
+def technical_review_status(review):
+    return 'PASS' if all(feature['verdict'] == 'PASS' for feature in review['features']) else 'BLOCKED'
 
 
 def review_passed(review, record, contract):
     return (isinstance(review, dict) and not check_record_review(review, record, contract)
-            and all(x['verdict'] == 'PASS' for x in review['features']))
+            and technical_review_status(review) == 'PASS')
 
 
 def matching_review(state, fid, record, contract):
@@ -344,7 +668,7 @@ def review_todos(state: dict, holder: dict, records: dict) -> dict:
     failed, unknown, unreviewed = [], [], []
     for view in holder.get('plan', {}).get('views', []):
         fid = view['id']
-        if view['engine'] != 'image' or fid not in records:
+        if view['engine'] not in {'image', 'parent_crop'} or fid not in records:
             continue
         contract = holder['plan'].get('visibility_contract', {}).get(fid)
         review = matching_review(state, fid, records[fid], contract)

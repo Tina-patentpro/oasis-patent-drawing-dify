@@ -122,6 +122,10 @@ def build_expression_guide(contract: dict, scene: dict, *, _evidence=None, _memb
             or not finite(scale) or not 1<=scale<=100):
         return {'status':'FAIL','issues':[{'rule':'GUIDE-PROJECTION','verdict':'FAIL','message':'bounded canvas/projection required'}]}
     mode=scene.get('render_mode','wireframe'); tilt=projection.get('tilt',.35)
+    view = projection.get('view', 'isometric')
+    if view not in ('isometric', 'front', 'top') or (view != 'isometric' and (display or mode != 'opaque_surfaces')):
+        return {'status': 'FAIL', 'issues': [{'rule': 'GUIDE-PROJECTION', 'verdict': 'FAIL',
+                                               'message': 'orthographic views require unregistered opaque geometry'}]}
     if mode not in {'wireframe','opaque_surfaces'} or not finite(tilt) or not .15<=tilt<=1.2:
         return {'status':'FAIL','issues':[{'rule':'GUIDE-PROJECTION','verdict':'FAIL','message':'bounded render mode/tilt required'}]}
     opaque=mode=='opaque_surfaces'
@@ -132,6 +136,10 @@ def build_expression_guide(contract: dict, scene: dict, *, _evidence=None, _memb
     active_map = None
     def project_unregistered(p):
         x,y,z=p
+        if view == 'front':
+            return round(origin[0] + scale*x, 2), round(origin[1] - scale*z, 2)
+        if view == 'top':
+            return round(origin[0] + scale*x, 2), round(origin[1] - scale*y, 2)
         return (round(origin[0]+scale*(x-.7*y),2),round(origin[1]+scale*(tilt*x+tilt*y-z),2))
     try:
         if display:
@@ -157,7 +165,12 @@ def build_expression_guide(contract: dict, scene: dict, *, _evidence=None, _memb
         svg.append('<polyline points="'+' '.join(f'{x},{y}'for x,y in points)+'" fill="'+('white'if fill is not None else'none')+'" stroke="black" stroke-width="'+str(width)+'"/>')
     def circle(cx,cy,z,r):
         return [project([cx+r*math.cos(i*math.pi/32),cy+r*math.sin(i*math.pi/32),z])for i in range(65)]
-    def depth(p):return .7*p[0]+p[1]+1.7*tilt*p[2]
+    def depth(p):
+        if view == 'front':
+            return -p[1]
+        if view == 'top':
+            return p[2]
+        return .7*p[0]+p[1]+1.7*tilt*p[2]
     def omitted_boundary(corners,painter,width=2):
         for start,end in zip(corners,corners[1:]+corners[:1]):
             dx,dy=end[0]-start[0],end[1]-start[1];length=math.hypot(dx,dy)

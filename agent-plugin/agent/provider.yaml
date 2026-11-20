@@ -1,0 +1,17 @@
+identity:
+  name: patent_drawing_agent
+  author: tina-patentpro
+  label:
+    en_US: Patent drawing preparation
+    zh_Hans: 专利复杂图准备
+  description:
+    en_US: Prepare a source-bound complex drawing.
+    zh_Hans: 核对已绑定来源的复杂图制图重点。
+  icon: icon.png
+  tags:
+  - productivity
+strategies:
+- agent/prepare.yaml
+extra:
+  python:
+    source: agent/provider.py

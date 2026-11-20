@@ -1,5 +1,6 @@
 """Official Image API transport. A paid POST is attempted at most once."""
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from .images import PreparedImage, prepare_output
 from .prompts import DrawingRequest
 
 MODEL = "gpt-image-2.6-flare"
+SUNBURST = "gpt-image-2.6-sunburst"
+IMAGE_MODELS = frozenset({MODEL, SUNBURST})
 API = "https://api.openai.com/v1/images/"
 MAX_RESPONSE = 24 * 1024 * 1024
 REQUEST_DEADLINE_SECONDS = 300
@@ -185,12 +188,14 @@ def _status_error(status: int, body: bytes, request_id: str | None):
     )
 
 
-def prepare_image_payload(request, reference=None, mask=None, *, references=(), markup=None) -> bytes:
+def prepare_image_payload(request, reference=None, mask=None, *, references=(), markup=None, model=MODEL) -> bytes:
     from .images import prepare_reference, prepare_markup, prepare_mask
     if not isinstance(references, tuple) or len(references) > 15 or ((mask is not None or markup is not None or references) and reference is None):
         raise DrawingError('parameter_error', '首图/附参考数量或类型无效')
     if mask is not None and markup is not None: raise DrawingError('parameter_error', 'mask与markup互斥')
-    payload = {'model': MODEL, 'prompt': request.prompt, 'size': request.size, 'quality': request.quality,
+    if not isinstance(model, str) or model not in IMAGE_MODELS:
+        raise DrawingError('parameter_error', '图像模型不在允许列表中')
+    payload = {'model': model, 'prompt': request.prompt, 'size': request.size, 'quality': request.quality,
                'complexity': request.complexity, 'output_format': request.output_format, 'n': 1, 'background': 'opaque'}
     if reference is not None:
         if request.output_format != 'png': raise DrawingError('parameter_error', '修改工具只支持PNG输出')
@@ -245,18 +250,26 @@ class OpenAIImagesClient:
         if isinstance(self._transport, AuditedTransport):
             self._transport.validate_image_plan(plan_sha, required_images)
 
+    def validate_dispatch_lineage(self, source_sha, lineage_sha):
+        from .operator_policy import AuditedTransport
+        if isinstance(self._transport, AuditedTransport):
+            self._transport.validate_image_lineage(source_sha, lineage_sha)
+
     def render(
         self,
         request: DrawingRequest,
         reference: PreparedImage | None = None,
         mask: PreparedImage | None = None,
         evidence_sink=None,
-        *, references=(), markup=None,
+        *, references=(), markup=None, model=MODEL,
     ) -> RenderResult:
-        raw_payload = prepare_image_payload(request, reference, mask, references=references, markup=markup)
+        from .operator_policy import work_audit_headers
+
+        raw_payload = prepare_image_payload(request, reference, mask, references=references, markup=markup, model=model)
         endpoint = 'edits' if reference is not None else 'generations'
         request_id = None
         response_headers = {}
+        audit_headers = work_audit_headers(self._transport)
         if evidence_sink:
             evidence_sink('request', raw_payload)
 
@@ -278,6 +291,7 @@ class OpenAIImagesClient:
                         "Content-Type": "application/json",
                         "Accept": "application/json",
                         "Accept-Encoding": "identity",
+                        **audit_headers,
                         **({"x-patent-recovery-id":self._recovery["authorization_id"],"x-patent-recovery-evidence-sha256":self._recovery["evidence_sha256"]} if getattr(self,"_recovery",None) else {}),
                         **({"x-patent-source-sha256":self._lineage[0],"x-patent-lineage-sha256":self._lineage[1]} if getattr(self,"_lineage",None) else {}),
                         **({"x-patent-plan-sha256":self._plan_sha256,
@@ -304,7 +318,10 @@ class OpenAIImagesClient:
                     ) from None
                 if evidence_sink:
                     evidence_sink('response', body)
-                    evidence_sink('headers', json.dumps({'status': response.status_code, 'headers': response_headers}).encode())
+                    evidence_sink('headers', json.dumps({
+                        'status': response.status_code, 'headers': response_headers,
+                        'body_sha256': hashlib.sha256(body).hexdigest(),
+                    }).encode())
                 if response.status_code != 200:
                     raise _status_error(response.status_code, body, request_id)
                 return body
@@ -327,36 +344,40 @@ class OpenAIImagesClient:
                 "连接中断或超时，执行与费用状态未知；未自动重试，请先核对官方用量",
                 request_id,
             ) from None
-        try:
-            result = json.loads(body)
-            data = result.get("data")
-            if (
-                not isinstance(data, list)
-                or len(data) != 1
-                or not isinstance(data[0], dict)
-                or not data[0].get("b64_json")
-            ):
-                raise DrawingError(
-                    "upstream_no_image",
-                    "OpenAI未返回一张有效图像；未下载任何输出URL",
-                    request_id,
-                )
-            image = prepare_output(data[0]["b64_json"], request.output_format)
-            usage = result.get("usage")
-            svg_usage = result.get("svg_usage")
-            return RenderResult(
-                image, request_id, safe_usage(usage), safe_usage(svg_usage), body, json.loads(raw_payload), response_headers, project_usage(usage)
-            )
-        except DrawingError as error:
-            if error.request_id is None and request_id is not None:
-                raise DrawingError(
-                    error.category, error.public_message, request_id,http_status=200,response_body=body
-                ) from None
-            error.http_status=200;error._response_body=body
-            raise
-        except (ValueError, TypeError, AttributeError):
+        return decode_image_response(body, request.output_format, request_id, raw_payload, response_headers)
+
+
+def decode_image_response(body, output_format, request_id, raw_payload, response_headers):
+    try:
+        result = json.loads(body)
+        data = result.get("data")
+        if (
+            not isinstance(data, list)
+            or len(data) != 1
+            or not isinstance(data[0], dict)
+            or not data[0].get("b64_json")
+        ):
             raise DrawingError(
-                "upstream_invalid_response",
-                "OpenAI返回无效响应；未取得可用图像",
-                request_id,http_status=200,response_body=body,
+                "upstream_no_image",
+                "OpenAI未返回一张有效图像；未下载任何输出URL",
+                request_id,
+            )
+        image = prepare_output(data[0]["b64_json"], output_format)
+        usage = result.get("usage")
+        svg_usage = result.get("svg_usage")
+        return RenderResult(
+            image, request_id, safe_usage(usage), safe_usage(svg_usage), body, json.loads(raw_payload), response_headers, project_usage(usage)
+        )
+    except DrawingError as error:
+        if error.request_id is None and request_id is not None:
+            raise DrawingError(
+                error.category, error.public_message, request_id,http_status=200,response_body=body
             ) from None
+        error.http_status=200;error._response_body=body
+        raise
+    except (ValueError, TypeError, AttributeError):
+        raise DrawingError(
+            "upstream_invalid_response",
+            "OpenAI返回无效响应；未取得可用图像",
+            request_id,http_status=200,response_body=body,
+        ) from None

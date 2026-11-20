@@ -1,0 +1,40 @@
+identity:
+  name: prepare_complex_drawing
+  author: tina-patentpro
+  label:
+    en_US: Prepare complex drawings
+    zh_Hans: 准备复杂图
+description:
+  en_US: Propose a drawing focus within a validated source and view scope.
+  zh_Hans: 在已核来源及视图范围内提出制图重点。
+parameters:
+- name: context_id
+  type: string
+  required: true
+  label:
+    en_US: Conversation ID
+- name: workspace_id
+  type: string
+  required: true
+  label:
+    en_US: Workspace ID
+- name: scope
+  type: string
+  required: true
+  label:
+    en_US: Validated plan scope
+- name: durable_work
+  type: string
+  required: false
+  label:
+    en_US: Use isolated durable execution
+    zh_Hans: 使用隔离持久执行
+- name: expected_revision
+  type: string
+  required: false
+  label:
+    en_US: Confirmed intake revision
+    zh_Hans: 已确认采集修订
+extra:
+  python:
+    source: agent/prepare.py

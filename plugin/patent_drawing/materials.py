@@ -68,3 +68,14 @@ def ingest_material(files, max_bytes=16 * 1024 * 1024):
         'figure_presence': presence, 'strategy': {'present': 'modify_supplement', 'absent': 'create_new', 'unknown': 'review_source_figures'}[presence],
         'text': '\n\n'.join(f'[{p["id"]}]\n{p["text"]}' for p in pages),
         'extractor': 'pypdfium2-5.14.0/process; full pages retained; graphic detection is not semantic acceptance'}
+
+
+
+def extract_pdf_image(pdf, page_number, object_number):
+    result = subprocess.run(
+        [sys.executable, '-m', 'patent_drawing.pdf_worker', str(page_number), str(object_number)],
+        cwd=Path(__file__).resolve().parents[1], input=pdf, capture_output=True, timeout=25,
+    )
+    if result.returncode or not result.stdout.startswith(b'\x89PNG\r\n\x1a\n'):
+        raise ValueError('选定的 PDF 图像对象无法解码，请上传原图以核对。')
+    return result.stdout
